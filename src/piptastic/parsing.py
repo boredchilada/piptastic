@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -12,6 +13,11 @@ from packaging.utils import canonicalize_name
 
 from piptastic.logging import get_logger
 from piptastic.models import Dep, DepSource, SourceKind
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 logger = get_logger(__name__)
 
@@ -36,6 +42,10 @@ def parse_source(source: DepSource) -> list[Dep]:
     """
     if source.kind in (SourceKind.REQUIREMENTS_TXT, SourceKind.CONSTRAINTS_TXT):
         return _parse_requirements_file(source, _visited=set())
+    if source.kind == SourceKind.PYPROJECT_PEP621:
+        return _parse_pep621(source)
+    if source.kind == SourceKind.PYPROJECT_POETRY:
+        return _parse_poetry(source)
     raise NotImplementedError(f"parsing for {source.kind} not yet implemented")
 
 
@@ -95,7 +105,7 @@ def _resolve_include(base_dir: Path, line: str) -> Path | None:
 
 
 def _parse_one_requirement_line(
-    line: str, *, source: DepSource, line_no: int
+    line: str, *, source: DepSource, line_no: int | None
 ) -> Dep | None:
     # Pip allows bare direct-URL / VCS requirements (e.g.
     # `git+https://github.com/x/y@v1#egg=name`) without a `name @ ` prefix.
@@ -139,3 +149,159 @@ def _rewrite_bare_url(line: str) -> str:
     # Strip subdirectory/etc. tokens after the egg name if any leaked in.
     name = name.split("&", 1)[0]
     return f"{name} @ {line}"
+
+
+# ---------- pyproject.toml (PEP 621) ----------
+
+def _parse_pep621(source: DepSource) -> list[Dep]:
+    data = _read_toml(source.path)
+    project = data.get("project", {})
+    if source.group == "default":
+        strings = project.get("dependencies", []) or []
+    else:
+        optional = project.get("optional-dependencies", {}) or {}
+        strings = optional.get(source.group, []) or []
+
+    deps: list[Dep] = []
+    for s in strings:
+        dep = _parse_one_requirement_line(s, source=source, line_no=None)
+        if dep is not None:
+            deps.append(dep)
+    return deps
+
+
+# ---------- pyproject.toml (Poetry) ----------
+
+def _parse_poetry(source: DepSource) -> list[Dep]:
+    data = _read_toml(source.path)
+    poetry = data.get("tool", {}).get("poetry", {})
+
+    if source.group == "default":
+        table = poetry.get("dependencies", {}) or {}
+    else:
+        groups = poetry.get("group", {}) or {}
+        table = groups.get(source.group, {}).get("dependencies", {}) or {}
+
+    deps: list[Dep] = []
+    for name, value in table.items():
+        if name == "python":  # interpreter constraint, not a real dep
+            continue
+        pep508 = _poetry_to_pep508(name, value)
+        if pep508 is None:
+            continue
+        dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
+        if dep is not None:
+            deps.append(dep)
+    return deps
+
+
+def _poetry_to_pep508(name: str, value: Any) -> str | None:
+    """Convert a Poetry dep spec to a PEP 508 string."""
+    if isinstance(value, str):
+        spec = _poetry_version_to_specifier(value)
+        return f"{name}{spec}" if spec else name
+
+    if not isinstance(value, dict):
+        logger.warning("unsupported poetry dep spec for %s: %r", name, value)
+        return None
+
+    version = value.get("version", "*")
+    spec = _poetry_version_to_specifier(version)
+    extras = value.get("extras") or []
+    marker = value.get("python")
+
+    extras_part = f"[{','.join(extras)}]" if extras else ""
+    marker_part = (
+        f"; python_version {_python_constraint_to_marker(marker)}" if marker else ""
+    )
+    return f"{name}{extras_part}{spec}{marker_part}"
+
+
+def _poetry_version_to_specifier(v: str) -> str:
+    """Convert Poetry version shorthand to a PEP 440 specifier string."""
+    v = v.strip()
+    if v == "*" or v == "":
+        return ""
+    if v.startswith("^"):
+        return _caret_to_specifier(v[1:])
+    if v.startswith("~"):
+        return _tilde_to_specifier(v[1:])
+    # plain version, or already a PEP 440-style range
+    if v[:1] in (">", "<", "=", "!"):
+        return v
+    return f"=={v}"
+
+
+def _caret_to_specifier(base: str) -> str:
+    """`^X.Y.Z` -> `>=X.Y.Z,<(X+1).0.0`. `^0.Y.Z` -> `>=0.Y.Z,<0.(Y+1).0`."""
+    parts = _split_version(base)
+    if not parts:
+        return ""
+    upper = list(parts)
+    for i, n in enumerate(parts):
+        if n != 0:
+            upper[i] = n + 1
+            for j in range(i + 1, len(upper)):
+                upper[j] = 0
+            break
+    else:
+        # all zeros -> behave like ==
+        return f"=={base}"
+    while len(upper) < 3:
+        upper.append(0)
+    return f">={base},<{'.'.join(str(x) for x in upper)}"
+
+
+def _tilde_to_specifier(base: str) -> str:
+    """`~X.Y.Z` -> `>=X.Y.Z,<X.(Y+1).0`. `~X.Y` -> `>=X.Y,<(X+1).0.0`.
+    `~X` -> `>=X,<(X+1).0.0`.
+
+    Poetry's tilde: when the patch component is given, lock to the same
+    minor (next-minor upper bound). When only major.minor or major is given,
+    lock to the same major (next-major upper bound).
+    """
+    parts = _split_version(base)
+    if not parts:
+        return ""
+    if len(parts) >= 3:
+        # ~X.Y.Z -> >=X.Y.Z,<X.(Y+1).0
+        upper = [parts[0], parts[1] + 1, 0]
+        return f">={base},<{'.'.join(str(x) for x in upper)}"
+    # ~X or ~X.Y -> >=base,<(X+1).0.0
+    upper = [parts[0] + 1, 0, 0]
+    return f">={base},<{'.'.join(str(x) for x in upper)}"
+
+
+def _split_version(v: str) -> list[int]:
+    """Split a dotted version into a list of ints. Returns [] on any non-int part."""
+    out: list[int] = []
+    for seg in v.split("."):
+        try:
+            out.append(int(seg))
+        except ValueError:
+            return []
+    return out
+
+
+def _python_constraint_to_marker(value: str) -> str:
+    """Map a Poetry `python = ">=3.10"` to a PEP 508 marker tail.
+
+    Returns the comparison + quoted version, e.g. `>= "3.10"`. The caller
+    prefixes this with `python_version `.
+    """
+    v = value.strip()
+    if v.startswith((">=", "<=", "==", "!=")):
+        return f'{v[:2]} "{v[2:].strip()}"'
+    if v.startswith((">", "<")):
+        return f'{v[:1]} "{v[1:].strip()}"'
+    return f'== "{v}"'
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    """Read and parse a TOML file. Returns {} on any read/parse error (logged)."""
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        logger.warning("could not parse TOML %s: %s", path, e)
+        return {}

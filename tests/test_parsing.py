@@ -127,3 +127,67 @@ def test_parse_invalid_line_warns_but_continues(write_tree, caplog):
     deps = parse_source(src)
     names = {d.name for d in deps}
     assert names == {"flask", "requests"}
+
+
+def test_parse_pyproject_pep621_default_group():
+    src = DepSource(
+        kind=SourceKind.PYPROJECT_PEP621,
+        path=FIXTURES / "pyproject_pep621" / "pyproject.toml",
+        group="default",
+    )
+    deps = parse_source(src)
+    names = {d.name for d in deps}
+    assert names == {"flask", "requests", "httpx"}
+
+    httpx = _by_name(deps, "httpx")
+    assert "http2" in httpx.extras
+    assert httpx.marker is not None
+
+
+def test_parse_pyproject_pep621_optional_group():
+    src = DepSource(
+        kind=SourceKind.PYPROJECT_PEP621,
+        path=FIXTURES / "pyproject_pep621" / "pyproject.toml",
+        group="dev",
+    )
+    deps = parse_source(src)
+    assert {d.name for d in deps} == {"pytest", "black"}
+
+
+def test_parse_pyproject_poetry_caret_tilde():
+    src = DepSource(
+        kind=SourceKind.PYPROJECT_POETRY,
+        path=FIXTURES / "pyproject_poetry" / "pyproject.toml",
+        group="default",
+    )
+    deps = parse_source(src)
+    names = {d.name for d in deps}
+    # "python" is the interpreter constraint, NOT a dep
+    assert "python" not in names
+    assert names == {"flask", "requests", "httpx", "unpinned-thing"}
+
+    flask = _by_name(deps, "flask")
+    # ^3.0.2 -> >=3.0.2,<4.0.0
+    # NOTE: SpecifierSet stringifies in sorted order; compare semantically.
+    assert flask.specifier == SpecifierSet(">=3.0.2,<4.0.0")
+
+    requests = _by_name(deps, "requests")
+    # ~2.30 -> >=2.30,<3.0.0  (Poetry's "~" without micro -> next-major lock)
+    assert requests.specifier == SpecifierSet(">=2.30,<3.0.0")
+
+    httpx = _by_name(deps, "httpx")
+    assert "http2" in httpx.extras
+    assert httpx.specifier == SpecifierSet(">=0.27")
+
+    unpinned = _by_name(deps, "unpinned-thing")
+    assert unpinned.specifier == SpecifierSet()
+
+
+def test_parse_pyproject_poetry_group():
+    src = DepSource(
+        kind=SourceKind.PYPROJECT_POETRY,
+        path=FIXTURES / "pyproject_poetry" / "pyproject.toml",
+        group="dev",
+    )
+    deps = parse_source(src)
+    assert {d.name for d in deps} == {"pytest"}

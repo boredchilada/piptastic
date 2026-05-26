@@ -1,0 +1,13 @@
+[tool.poetry]
+name = "demo"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+flask = "^3.0.2"
+requests = "~2.30"
+httpx = { version = ">=0.27", extras = ["http2"] }
+unpinned-thing = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
