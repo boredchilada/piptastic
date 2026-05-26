@@ -191,3 +191,43 @@ def test_parse_pyproject_poetry_group():
     )
     deps = parse_source(src)
     assert {d.name for d in deps} == {"pytest"}
+
+
+def test_parse_pipfile_packages():
+    src = DepSource(
+        kind=SourceKind.PIPFILE,
+        path=FIXTURES / "pipfile_project" / "Pipfile",
+        group="default",
+    )
+    deps = parse_source(src)
+    names = {d.name for d in deps}
+    assert names == {"flask", "requests", "httpx"}
+
+    requests = _by_name(deps, "requests")
+    assert requests.specifier == SpecifierSet()  # "*"
+
+    httpx = _by_name(deps, "httpx")
+    assert "http2" in httpx.extras
+    assert str(httpx.specifier) == ">=0.27"
+
+
+def test_parse_pipfile_dev_packages():
+    src = DepSource(
+        kind=SourceKind.PIPFILE,
+        path=FIXTURES / "pipfile_project" / "Pipfile",
+        group="dev",
+    )
+    deps = parse_source(src)
+    assert {d.name for d in deps} == {"pytest"}
+
+
+def test_parse_pipfile_lock_default():
+    src = DepSource(
+        kind=SourceKind.PIPFILE_LOCK,
+        path=FIXTURES / "pipfile_project" / "Pipfile.lock",
+        group="default",
+    )
+    deps = parse_source(src)
+    names = {d.name for d in deps}
+    assert names == {"flask", "requests", "httpx"}
+    assert _by_name(deps, "flask").specifier == SpecifierSet("==3.0.2")

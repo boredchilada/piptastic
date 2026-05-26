@@ -46,6 +46,10 @@ def parse_source(source: DepSource) -> list[Dep]:
         return _parse_pep621(source)
     if source.kind == SourceKind.PYPROJECT_POETRY:
         return _parse_poetry(source)
+    if source.kind == SourceKind.PIPFILE:
+        return _parse_pipfile(source)
+    if source.kind == SourceKind.PIPFILE_LOCK:
+        return _parse_pipfile_lock(source)
     raise NotImplementedError(f"parsing for {source.kind} not yet implemented")
 
 
@@ -305,3 +309,47 @@ def _read_toml(path: Path) -> dict[str, Any]:
     except (OSError, tomllib.TOMLDecodeError) as e:
         logger.warning("could not parse TOML %s: %s", path, e)
         return {}
+
+
+# ---------- Pipfile / Pipfile.lock ----------
+
+def _parse_pipfile(source: DepSource) -> list[Dep]:
+    data = _read_toml(source.path)
+    table_name = "dev-packages" if source.group == "dev" else "packages"
+    table = data.get(table_name, {}) or {}
+
+    deps: list[Dep] = []
+    for name, value in table.items():
+        # Pipfile shorthand uses identical conventions to Poetry:
+        # caret/tilde/star + table form with version/extras/markers.
+        pep508 = _poetry_to_pep508(name, value)
+        if pep508 is None:
+            continue
+        dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
+        if dep is not None:
+            deps.append(dep)
+    return deps
+
+
+def _parse_pipfile_lock(source: DepSource) -> list[Dep]:
+    import json
+    try:
+        with source.path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("could not parse %s: %s", source.path, e)
+        return []
+
+    table_name = "develop" if source.group == "dev" else "default"
+    table = data.get(table_name, {}) or {}
+
+    deps: list[Dep] = []
+    for name, info in table.items():
+        version_spec = info.get("version", "")  # e.g. "==3.0.2"
+        extras = info.get("extras") or []
+        extras_part = f"[{','.join(extras)}]" if extras else ""
+        pep508 = f"{name}{extras_part}{version_spec}"
+        dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
+        if dep is not None:
+            deps.append(dep)
+    return deps
