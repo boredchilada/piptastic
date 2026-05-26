@@ -52,7 +52,7 @@ def _format_pin_score(score: float | None) -> str:
 
 
 def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
-    table = Table(title="piptastic — summary", show_lines=False)
+    table = Table(title="piptastic - summary", show_lines=False)
     table.add_column("Project")
     table.add_column("Py", justify="right")
     table.add_column("Pin score", justify="right")
@@ -65,7 +65,7 @@ def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
     for a in audits:
         table.add_row(
             a.project.name,
-            a.project.python_version or "—",
+            a.project.python_version or "-",
             _format_pin_score(a.pinning_score),
             str(a.drift_summary.get(SemverDrift.MAJOR, 0)),
             str(a.drift_summary.get(SemverDrift.MINOR, 0)),
@@ -77,7 +77,7 @@ def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
 
 
 def _render_table(audits: list[ProjectAudit], console: Console) -> None:
-    table = Table(title="piptastic — packages", show_lines=False)
+    table = Table(title="piptastic - packages", show_lines=False)
     table.add_column("Project")
     table.add_column("File")
     table.add_column("Group")
@@ -95,7 +95,7 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
             if d.yanked:
                 notes = "yanked" + (f"; {notes}" if notes else "")
             current = _current_str(d)
-            latest = str(d.latest) if d.latest else "—"
+            latest = str(d.latest) if d.latest else "-"
             table.add_row(
                 a.project.name,
                 d.dep.source.path.name,
@@ -136,11 +136,11 @@ def _dep_line(d: DepAudit) -> str:
     drift = d.drift.value
     style = DRIFT_STYLE[d.drift]
     current = _current_str(d)
-    latest = str(d.latest) if d.latest else "—"
+    latest = str(d.latest) if d.latest else "-"
     yanked_mark = " [red strike]yanked[/red strike]" if d.yanked else ""
     return (
         f"{d.dep.name:<25} "
-        f"{current:<14} → {latest:<10}  "
+        f"{current:<14} -> {latest:<10}  "
         f"[{style}]{drift:<7}[/{style}]  "
         f"{d.pin_status.value}"
         f"{yanked_mark}"
@@ -153,4 +153,4 @@ def _current_str(d: DepAudit) -> str:
             return clause.version
     if d.installed is not None:
         return f"({d.installed})"
-    return "—"
+    return "-"

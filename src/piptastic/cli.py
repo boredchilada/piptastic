@@ -121,7 +121,11 @@ def _cmd_audit(args) -> int:
 
     client = _build_client(args)
     current_py = Version(".".join(str(x) for x in sys.version_info[:3]))
-    audits = [audit_project(p, client, current_python=current_py) for p in projects]
+    include_pre = getattr(args, "include_prereleases", False)
+    audits = [
+        audit_project(p, client, current_python=current_py, include_prereleases=include_pre)
+        for p in projects
+    ]
 
     if args.json:
         print(render_json(audits, root=path))

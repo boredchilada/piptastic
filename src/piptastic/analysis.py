@@ -7,7 +7,6 @@ from collections import Counter
 from typing import Iterable, Protocol
 
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from piptastic.logging import get_logger
@@ -104,6 +103,8 @@ def audit_project(
     project: Project,
     client: _MetadataSource,
     current_python: Version,
+    *,
+    include_prereleases: bool = False,
 ) -> ProjectAudit:
     deps = _collect_deps(project)
     target_python = _project_target_python(project, current_python)
@@ -118,8 +119,10 @@ def audit_project(
         latest, latest_pre = _pick_latest(
             metadata.get(dep.name), target_python=target_python
         )
+        # If the user asked for prereleases to count as "latest", swap them in.
+        effective_latest = latest_pre if include_prereleases else latest
         current_for_drift = _current_version_for_drift(dep, installed)
-        drift = classify_drift(current_for_drift, latest)
+        drift = classify_drift(current_for_drift, effective_latest)
         pin = classify_pin_status(dep.specifier, url=dep.url)
         warnings: list[str] = []
         if dep.url:
@@ -134,7 +137,7 @@ def audit_project(
         audits.append(DepAudit(
             dep=dep,
             installed=installed,
-            latest=latest,
+            latest=effective_latest,
             latest_including_prereleases=latest_pre,
             drift=drift,
             pin_status=pin,
