@@ -241,3 +241,53 @@ def test_render_stats_json_full_shape():
     assert yf["package_name"] == "python-levenshtein"
     assert yf["pinned_version"] == "0.12.0"
     assert yf["latest_non_yanked"] == "0.27.3"
+
+
+# ---------- Terminal renderer ----------
+
+from rich.console import Console
+from piptastic.render.terminal import render_stats_terminal, _make_console
+
+
+def test_make_console_safe_box_for_non_utf8(monkeypatch):
+    """When stdout encoding isn't UTF-8, the helper should pick safe_box=True."""
+    # Force the helper's check to think we're on cp1252
+    import piptastic.render.terminal as term_mod
+    monkeypatch.setattr(term_mod, "_stdout_is_utf8", lambda: False)
+    c = _make_console()
+    # rich.Console exposes safe_box as an instance attribute
+    assert c.safe_box is True
+
+
+def test_make_console_no_safe_box_for_utf8(monkeypatch):
+    import piptastic.render.terminal as term_mod
+    monkeypatch.setattr(term_mod, "_stdout_is_utf8", lambda: True)
+    c = _make_console()
+    assert c.safe_box is False
+
+
+def test_render_stats_terminal_does_not_raise():
+    audits = [
+        _make_audit("a", [
+            ("requests", "==2.32.2", PS.PINNED, SD.MAJOR, False, "3.0.0"),
+        ]),
+        _make_audit("b", [
+            ("requests", "==2.32.2", PS.PINNED, SD.MAJOR, False, "3.0.0"),
+            ("ynl", "==4.*", PS.PINNED, SD.UNKNOWN, True, "5.0.0"),
+        ]),
+    ]
+    report = compute_stats(audits, top=5, root=Path("/lab"))
+    console = Console(record=True, no_color=True, safe_box=True)
+    render_stats_terminal(report, console=console)
+    text = console.export_text()
+    assert "requests" in text
+    assert "ynl" in text  # yanked finding
+
+
+def test_render_stats_terminal_empty():
+    report = compute_stats([], top=5, root=Path("/lab"))
+    console = Console(record=True, no_color=True, safe_box=True)
+    render_stats_terminal(report, console=console)
+    text = console.export_text()
+    # Smoke: must mention zero projects without crashing
+    assert "0" in text
