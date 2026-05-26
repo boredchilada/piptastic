@@ -61,6 +61,44 @@ piptastic update ./myproject flask requests
 piptastic update ./myproject --no-test
 ```
 
+## Bootstrap and stats
+
+For a project that has a working `.venv/` but no `requirements.txt`,
+generate one from the venv's installed packages:
+
+```bash
+# Dry-run (print to stdout, write nothing)
+piptastic bootstrap ./myproject --dry-run
+
+# Write to <myproject>/requirements.txt (refuses to overwrite)
+piptastic bootstrap ./myproject
+
+# Overwrite with backup
+piptastic bootstrap ./myproject --force
+```
+
+The output is `name==X.Y.Z` pins for every distribution in the venv,
+excluding pip/setuptools/wheel/etc. plumbing and any editable install
+of the project itself.
+
+For a tree-wide rollup of dependency health:
+
+```bash
+# Terminal report: top packages, version fragmentation, yanked pins,
+# unpinned projects, tree-wide drift/pin posture histograms
+piptastic stats ~/projects
+
+# JSON for dashboards (stable schema_version=1, kind='stats')
+piptastic stats ~/projects --json > stats.json
+
+# Limit top-N packages (default 20)
+piptastic stats ~/projects --top 5
+```
+
+`stats` reuses the same discovery + audit pipeline as `audit`, so it
+honors `--exclude`, the on-disk cache, and per-project Python version
+detection.
+
 ## Output channels
 
 - **Tree view** (default for multi-project audits) — nested project → file → dep.
