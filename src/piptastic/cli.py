@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import logging
+import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from packaging.version import Version
 
 from piptastic import __version__
 from piptastic.analysis import audit_project
+from piptastic.bootstrap import find_site_packages, find_venv, freeze_venv, is_plumbing
 from piptastic.discovery import discover_one, discover_tree
 from piptastic.logging import configure_logging, get_logger
 from piptastic.models import ProjectAudit, SemverDrift
@@ -64,6 +69,28 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("--refresh", action="store_true")
     upd.add_argument("--temp-test-env", action="store_true")
 
+    # bootstrap
+    boot = sub.add_parser(
+        "bootstrap",
+        help="Generate requirements.txt from a project's installed venv",
+    )
+    boot.add_argument("path", type=Path)
+    boot.add_argument(
+        "--venv",
+        type=Path, default=None,
+        help="Explicit venv directory (relative to PATH or absolute)",
+    )
+    boot.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing requirements.txt (creates a backup first)",
+    )
+    boot.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the requirements to stdout; do not write any file",
+    )
+
     return parser
 
 
@@ -85,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(args)
         if args.command == "update":
             return _cmd_update(args)
+        if args.command == "bootstrap":
+            return _cmd_bootstrap(args)
     except Exception as e:  # last-resort guard so we never traceback at the user
         logger.exception("unhandled error: %s", e)
         return 1
@@ -211,3 +240,70 @@ def _exceeds_threshold(audits: list[ProjectAudit], threshold: SemverDrift) -> bo
             if _DRIFT_RANK[d.drift] >= t:
                 return True
     return False
+
+
+def _cmd_bootstrap(args) -> int:
+    project_path = args.path.resolve()
+    if not project_path.is_dir():
+        logger.error("not a directory: %s", project_path)
+        return 1
+
+    candidates, chosen = find_venv(project_path, explicit=args.venv)
+    if not candidates:
+        logger.error(
+            "no venv found under %s; pass --venv to specify",
+            project_path,
+        )
+        return 1
+    if chosen is None:
+        rel = ", ".join(str(c.relative_to(project_path)) for c in candidates)
+        logger.error(
+            "multiple venvs found (%s); pass --venv to disambiguate",
+            rel,
+        )
+        return 1
+
+    lines = freeze_venv(project_path, chosen)
+
+    if args.dry_run:
+        for line in lines:
+            print(line)
+        return 0
+
+    target = project_path / "requirements.txt"
+    if target.exists() and not args.force:
+        logger.error(
+            "%s already exists; pass --force to overwrite (a backup will be created)",
+            target,
+        )
+        return 1
+
+    if target.exists() and args.force:
+        backup_dir = project_path / ".requirements_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()[:8]
+        dest = backup_dir / f"requirements_{ts}_{digest}.txt"
+        shutil.copy2(target, dest)
+        print(f"piptastic: backed up existing requirements.txt to {dest}")
+
+    try:
+        target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    except OSError as e:
+        logger.error("failed to write %s: %s", target, e)
+        return 2
+
+    sp = find_site_packages(chosen)
+    if sp is not None:
+        plumbing_count = sum(
+            1 for d in importlib.metadata.distributions(path=[str(sp)])
+            if d.metadata["Name"] and is_plumbing(d.metadata["Name"])
+        )
+    else:
+        plumbing_count = 0
+
+    print(f"piptastic: wrote {target}")
+    print(f"  captured {len(lines)} deps from {chosen}")
+    if plumbing_count:
+        print(f"  skipped {plumbing_count} plumbing distributions")
+    return 0

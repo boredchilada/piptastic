@@ -60,3 +60,78 @@ def test_list_alias_runs(tmp_path, monkeypatch, capsys):
 
     exit_code = main(["list", str(FIXTURES / "req_only")])
     assert exit_code == 0
+
+
+from tests.test_bootstrap import build_fake_venv
+
+
+def test_bootstrap_writes_requirements(tmp_path, monkeypatch, capsys):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    build_fake_venv(project / ".venv", packages={"flask": "3.0.2", "pip": "24.0"})
+
+    exit_code = main(["bootstrap", str(project)])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    req_file = project / "requirements.txt"
+    assert req_file.is_file()
+    content = req_file.read_text(encoding="utf-8")
+    assert "flask==3.0.2" in content
+    assert "pip==" not in content  # plumbing skipped
+
+
+def test_bootstrap_refuses_overwrite_without_force(tmp_path, capsys):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    build_fake_venv(project / ".venv", packages={"flask": "3.0.2"})
+    (project / "requirements.txt").write_text("preexisting==1.0\n", encoding="utf-8")
+
+    exit_code = main(["bootstrap", str(project)])
+    assert exit_code == 1
+    # Original content preserved
+    assert (project / "requirements.txt").read_text(encoding="utf-8") == "preexisting==1.0\n"
+
+
+def test_bootstrap_force_backs_up_then_overwrites(tmp_path):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    build_fake_venv(project / ".venv", packages={"flask": "3.0.2"})
+    (project / "requirements.txt").write_text("preexisting==1.0\n", encoding="utf-8")
+
+    exit_code = main(["bootstrap", str(project), "--force"])
+    assert exit_code == 0
+    new_content = (project / "requirements.txt").read_text(encoding="utf-8")
+    assert "flask==3.0.2" in new_content
+    assert "preexisting==1.0" not in new_content
+    # Backup exists
+    backups = list((project / ".requirements_backups").glob("requirements_*.txt"))
+    assert len(backups) == 1
+    assert "preexisting==1.0" in backups[0].read_text(encoding="utf-8")
+
+
+def test_bootstrap_dry_run(tmp_path, capsys):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    build_fake_venv(project / ".venv", packages={"flask": "3.0.2"})
+
+    exit_code = main(["bootstrap", str(project), "--dry-run"])
+    assert exit_code == 0
+    assert not (project / "requirements.txt").exists()
+    captured = capsys.readouterr()
+    assert "flask==3.0.2" in captured.out
+
+
+def test_bootstrap_no_venv(tmp_path):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    exit_code = main(["bootstrap", str(project)])
+    assert exit_code == 1
+
+
+def test_bootstrap_ambiguous_venv(tmp_path):
+    project = tmp_path / "myproj"
+    project.mkdir()
+    build_fake_venv(project / ".venv", packages={"flask": "3.0.2"})
+    build_fake_venv(project / "venv", packages={"flask": "3.0.2"})
+    exit_code = main(["bootstrap", str(project)])
+    assert exit_code == 1
