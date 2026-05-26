@@ -7,6 +7,8 @@ build/
 dist/
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
@@ -16,7 +18,7 @@ htmlcov/
 .venv
 venv/
 test_venv/
-test_env_*/
+.piptastic_test_*/
 
 # Editor
 .vscode/
