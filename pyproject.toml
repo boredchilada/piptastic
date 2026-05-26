@@ -36,6 +36,11 @@ dev = [
     "pytest-cov>=4.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/boredchilada/piptastic"
+Source = "https://github.com/boredchilada/piptastic"
+Issues = "https://github.com/boredchilada/piptastic/issues"
+
 [project.scripts]
 piptastic = "piptastic.cli:main"
 ptc = "piptastic.cli:main"
