@@ -1,0 +1,247 @@
+"""Drift classification, pin posture, and per-project audit rollup."""
+
+from __future__ import annotations
+
+import importlib.metadata
+from collections import Counter
+from typing import Iterable, Protocol
+
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
+
+from piptastic.logging import get_logger
+from piptastic.models import (
+    Dep,
+    DepAudit,
+    PackageMetadata,
+    PinStatus,
+    Project,
+    ProjectAudit,
+    ReleaseInfo,
+    SemverDrift,
+)
+from piptastic.parsing import parse_source
+
+logger = get_logger(__name__)
+
+
+PIN_WEIGHTS = {
+    PinStatus.PINNED: 1.0,
+    PinStatus.COMPATIBLE: 0.8,
+    PinStatus.RANGE: 0.6,
+    PinStatus.FLOOR: 0.3,
+    PinStatus.UNPINNED: 0.0,
+    # URL excluded from the average
+}
+
+
+class _MetadataSource(Protocol):
+    def fetch_many(self, names: Iterable[str]) -> dict[str, PackageMetadata]: ...
+
+
+# ---------- drift ----------
+
+def classify_drift(current: Version | None, latest: Version | None) -> SemverDrift:
+    if current is None or latest is None:
+        return SemverDrift.UNKNOWN
+    if current == latest:
+        return SemverDrift.NONE
+    if current.epoch != latest.epoch:
+        return SemverDrift.EPOCH
+
+    c_release = current.release
+    l_release = latest.release
+    # Pad to length 3 for comparison
+    def _pad3(t: tuple[int, ...]) -> tuple[int, int, int]:
+        return (t + (0, 0, 0))[:3]
+    c_maj, c_min, c_mic = _pad3(c_release)
+    l_maj, l_min, l_mic = _pad3(l_release)
+
+    if c_maj != l_maj:
+        return SemverDrift.MAJOR
+    if c_min != l_min:
+        return SemverDrift.MINOR
+    if c_mic != l_mic:
+        return SemverDrift.PATCH
+    # Release tuples match — difference must be in post/dev/local/build
+    return SemverDrift.BUILD
+
+
+# ---------- pin posture ----------
+
+def classify_pin_status(spec: SpecifierSet, *, url: str | None) -> PinStatus:
+    if url:
+        return PinStatus.URL
+    clauses = list(spec)
+    if not clauses:
+        return PinStatus.UNPINNED
+
+    operators = [c.operator for c in clauses]
+    versions = [c.version for c in clauses]
+
+    # Single == X.Y.Z
+    if len(clauses) == 1 and operators[0] == "==":
+        if versions[0].endswith(".*"):
+            return PinStatus.COMPATIBLE
+        return PinStatus.PINNED
+
+    if any(op == "~=" for op in operators):
+        return PinStatus.COMPATIBLE
+
+    has_lower = any(op in (">=", ">") for op in operators)
+    has_upper = any(op in ("<=", "<") for op in operators)
+    if has_lower and has_upper:
+        return PinStatus.RANGE
+    if has_lower:
+        return PinStatus.FLOOR
+    return PinStatus.UNPINNED
+
+
+# ---------- audit ----------
+
+def audit_project(
+    project: Project,
+    client: _MetadataSource,
+    current_python: Version,
+) -> ProjectAudit:
+    deps = _collect_deps(project)
+    target_python = _project_target_python(project, current_python)
+
+    names = sorted({d.name for d in deps if d.url is None})
+    metadata = client.fetch_many(names) if names else {}
+    unreachable = [n for n in names if n not in metadata]
+
+    audits: list[DepAudit] = []
+    for dep in deps:
+        installed = _installed_version(dep.name)
+        latest, latest_pre = _pick_latest(
+            metadata.get(dep.name), target_python=target_python
+        )
+        current_for_drift = _current_version_for_drift(dep, installed)
+        drift = classify_drift(current_for_drift, latest)
+        pin = classify_pin_status(dep.specifier, url=dep.url)
+        warnings: list[str] = []
+        if dep.url:
+            warnings.append("VCS/URL requirement — version cannot be tracked")
+        if dep.name in unreachable:
+            warnings.append("PyPI metadata unavailable")
+        if pin is PinStatus.UNPINNED and installed is None:
+            warnings.append("unpinned and not installed in current environment")
+
+        yanked = _is_pinned_version_yanked(dep, metadata.get(dep.name))
+
+        audits.append(DepAudit(
+            dep=dep,
+            installed=installed,
+            latest=latest,
+            latest_including_prereleases=latest_pre,
+            drift=drift,
+            pin_status=pin,
+            yanked=yanked,
+            warnings=tuple(warnings),
+        ))
+
+    score = _pinning_score(audits)
+    drift_summary = dict(Counter(a.drift for a in audits))
+    yanked_count = sum(1 for a in audits if a.yanked)
+
+    return ProjectAudit(
+        project=project,
+        deps=audits,
+        pinning_score=score,
+        drift_summary=drift_summary,
+        yanked_count=yanked_count,
+        pypi_unreachable=unreachable,
+    )
+
+
+# ---------- internals ----------
+
+def _collect_deps(project: Project) -> list[Dep]:
+    out: list[Dep] = []
+    for src in project.dep_sources:
+        out.extend(parse_source(src))
+    return out
+
+
+def _project_target_python(project: Project, current: Version) -> Version:
+    if project.python_version:
+        try:
+            return Version(project.python_version)
+        except InvalidVersion:
+            pass
+    return current
+
+
+def _installed_version(name: str) -> Version | None:
+    try:
+        raw = importlib.metadata.version(name)
+        return Version(raw)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    except InvalidVersion:
+        return None
+
+
+def _current_version_for_drift(dep: Dep, installed: Version | None) -> Version | None:
+    """Pick the 'current' version to compare against latest for drift."""
+    for clause in dep.specifier:
+        if clause.operator == "==":
+            v = clause.version.rstrip(".*")
+            try:
+                return Version(v)
+            except InvalidVersion:
+                return None
+    return installed
+
+
+def _pick_latest(
+    md: PackageMetadata | None,
+    *,
+    target_python: Version,
+) -> tuple[Version | None, Version | None]:
+    if md is None:
+        return None, None
+
+    stable: list[Version] = []
+    with_pre: list[Version] = []
+    for r in md.releases:
+        if r.yanked:
+            continue
+        if r.requires_python and not r.requires_python.contains(str(target_python), prereleases=True):
+            continue
+        with_pre.append(r.version)
+        if not r.version.is_prerelease:
+            stable.append(r.version)
+
+    latest = max(stable) if stable else None
+    latest_pre = max(with_pre) if with_pre else None
+    return latest, latest_pre
+
+
+def _is_pinned_version_yanked(dep: Dep, md: PackageMetadata | None) -> bool:
+    if md is None:
+        return False
+    pinned_str = None
+    for clause in dep.specifier:
+        if clause.operator == "==":
+            pinned_str = clause.version.rstrip(".*")
+            break
+    if pinned_str is None:
+        return False
+    try:
+        pinned = Version(pinned_str)
+    except InvalidVersion:
+        return False
+    for r in md.releases:
+        if r.version == pinned:
+            return r.yanked
+    return False
+
+
+def _pinning_score(audits: list[DepAudit]) -> float:
+    scored = [PIN_WEIGHTS[a.pin_status] for a in audits if a.pin_status in PIN_WEIGHTS]
+    if not scored:
+        return 0.0
+    return sum(scored) / len(scored)
