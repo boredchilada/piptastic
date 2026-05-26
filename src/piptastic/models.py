@@ -114,3 +114,42 @@ class ProjectAudit:
     drift_summary: dict[SemverDrift, int] = field(default_factory=dict)
     yanked_count: int = 0
     pypi_unreachable: list[str] = field(default_factory=list)
+
+
+# ---------- stats ----------
+
+@dataclass(frozen=True)
+class PackageFrequency:
+    name: str
+    project_count: int
+    projects: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class VersionFragmentation:
+    name: str
+    # version_str -> tuple of project names that pin to that version
+    versions: dict[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class YankedFinding:
+    project_name: str
+    project_path: Path
+    package_name: str
+    pinned_version: str
+    latest_non_yanked: str | None
+
+
+@dataclass(frozen=True)
+class StatsReport:
+    scanned_at: datetime
+    root: Path
+    project_count: int
+    total_deps: int
+    drift_histogram: dict[SemverDrift, int]
+    pin_status_histogram: dict[PinStatus, int]
+    top_packages: tuple[PackageFrequency, ...]
+    version_fragmentation: tuple[VersionFragmentation, ...]
+    yanked_findings: tuple[YankedFinding, ...]
+    unpinned_projects: tuple[str, ...]
