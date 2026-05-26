@@ -122,10 +122,15 @@ def _cmd_audit(args) -> int:
     client = _build_client(args)
     current_py = Version(".".join(str(x) for x in sys.version_info[:3]))
     include_pre = getattr(args, "include_prereleases", False)
-    audits = [
-        audit_project(p, client, current_python=current_py, include_prereleases=include_pre)
-        for p in projects
-    ]
+    audits = []
+    for p in projects:
+        try:
+            audits.append(
+                audit_project(p, client, current_python=current_py, include_prereleases=include_pre)
+            )
+        except Exception as e:
+            # One bad project must not kill the whole tree scan.
+            logger.warning("failed to audit project %s: %s", p.name, e)
 
     if args.json:
         print(render_json(audits, root=path))

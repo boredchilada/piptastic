@@ -61,8 +61,19 @@ def _parse_requirements_file(
         return []
     _visited.add(path)
 
+    # `utf-8-sig` strips a BOM if present; many requirements.txt files in
+    # the wild have one from Windows editors. Fall back to latin-1 (which
+    # never raises) if the file isn't valid UTF-8 at all — better to parse
+    # what we can than crash the whole scan over one bad file.
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        logger.warning("not valid UTF-8, falling back to latin-1: %s", path)
+        try:
+            text = path.read_text(encoding="latin-1")
+        except OSError as e:
+            logger.warning("could not read %s: %s", path, e)
+            return []
     except OSError as e:
         logger.warning("could not read %s: %s", path, e)
         return []

@@ -164,7 +164,11 @@ def audit_project(
 def _collect_deps(project: Project) -> list[Dep]:
     out: list[Dep] = []
     for src in project.dep_sources:
-        out.extend(parse_source(src))
+        try:
+            out.extend(parse_source(src))
+        except Exception as e:
+            # Never let a single malformed source file kill the whole audit.
+            logger.warning("failed to parse %s (%s): %s", src.path, src.kind.value, e)
     return out
 
 
