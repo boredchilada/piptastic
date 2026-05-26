@@ -110,7 +110,7 @@ class DepAudit:
 class ProjectAudit:
     project: Project
     deps: list[DepAudit]
-    pinning_score: float
+    pinning_score: float | None
     drift_summary: dict[SemverDrift, int] = field(default_factory=dict)
     yanked_count: int = 0
     pypi_unreachable: list[str] = field(default_factory=list)

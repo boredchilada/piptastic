@@ -80,8 +80,8 @@ def classify_pin_status(spec: SpecifierSet, *, url: str | None) -> PinStatus:
     operators = [c.operator for c in clauses]
     versions = [c.version for c in clauses]
 
-    # Single == X.Y.Z
-    if len(clauses) == 1 and operators[0] == "==":
+    # Single == X.Y.Z or === X.Y.Z (=== is exact-string match, even more strictly pinned)
+    if len(clauses) == 1 and operators[0] in ("==", "==="):
         if versions[0].endswith(".*"):
             return PinStatus.COMPATIBLE
         return PinStatus.PINNED
@@ -240,8 +240,12 @@ def _is_pinned_version_yanked(dep: Dep, md: PackageMetadata | None) -> bool:
     return False
 
 
-def _pinning_score(audits: list[DepAudit]) -> float:
+def _pinning_score(audits: list[DepAudit]) -> float | None:
+    """Weighted mean of PIN_WEIGHTS across all deps; None if no deps have a
+    weight (e.g. project with only URL deps, which are deliberately excluded
+    from PIN_WEIGHTS because URL pinning posture is fuzzy without parsing the
+    ref). Render layer should show 'n/a' for None instead of '0%'."""
     scored = [PIN_WEIGHTS[a.pin_status] for a in audits if a.pin_status in PIN_WEIGHTS]
     if not scored:
-        return 0.0
+        return None
     return sum(scored) / len(scored)
