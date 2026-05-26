@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.env
+.venv
+venv/
+test_venv/
+test_env_*/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# piptastic legacy + runtime
+requirements_backups/
+.requirements_backups/
+requirements_updates.log
+
+# piptastic dev cache (default location is ~/.cache/piptastic; this only
+# matters if someone overrides via env var to a path inside the repo)
+.piptastic_cache/
