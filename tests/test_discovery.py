@@ -92,3 +92,18 @@ def test_python_version_detected_from_pyproject():
     mixed = next(p for p in projects if p.name == "mixed")
     assert mixed.python_version == "3.11"
     assert mixed.python_source == "pyproject.toml"
+
+
+def test_discover_tree_excludes_dir_with_pyvenv_cfg():
+    """A dir named arbitrarily (not in VENV_EXACT_NAMES) but containing
+    pyvenv.cfg is still treated as a venv and skipped."""
+    root = FIXTURES / "oddly_named_runtime"
+    projects = discover_tree(root)
+    names = {p.name for p in projects}
+    assert "real_project" in names
+    assert "runtime_env_42" not in names
+    # The poison requirements.txt inside the fake venv must not have been read
+    assert not any(
+        "runtime_env_42" in str(s.path)
+        for p in projects for s in p.dep_sources
+    )
