@@ -1,0 +1,10 @@
+# Production deps
+flask==3.0.2
+requests>=2.30,<3
+sqlalchemy~=2.0.36
+pkg-with-extras[crypto]==1.2.3
+unpinned-pkg
+# blank line below kept for layout
+git+https://github.com/example/repo@v1.0#egg=repo-from-vcs
+needs-marker==1.0; python_version >= "3.10"
+-r dev-requirements.txt
