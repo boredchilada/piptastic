@@ -74,3 +74,43 @@ def _dep_to_dict(da: DepAudit) -> dict:
         "yanked": da.yanked,
         "warnings": list(da.warnings),
     }
+
+
+# ---------- stats ----------
+
+def render_stats_json(report) -> str:
+    """Render a StatsReport as a JSON string with schema_version=1 and
+    kind='stats'. (The audit shape uses kind='audit' implicitly via its
+    'projects' key; stats uses an explicit discriminator.)"""
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "stats",
+        "scanned_at": report.scanned_at.isoformat(),
+        "root": str(report.root),
+        "totals": {
+            "project_count": report.project_count,
+            "total_deps": report.total_deps,
+            "drift_histogram": {k.value: v for k, v in report.drift_histogram.items()},
+            "pin_status_histogram": {k.value: v for k, v in report.pin_status_histogram.items()},
+        },
+        "top_packages": [
+            {"name": p.name, "project_count": p.project_count, "projects": list(p.projects)}
+            for p in report.top_packages
+        ],
+        "version_fragmentation": [
+            {"name": v.name, "versions": {ver: list(projs) for ver, projs in v.versions.items()}}
+            for v in report.version_fragmentation
+        ],
+        "yanked_findings": [
+            {
+                "project_name": y.project_name,
+                "project_path": str(y.project_path),
+                "package_name": y.package_name,
+                "pinned_version": y.pinned_version,
+                "latest_non_yanked": y.latest_non_yanked,
+            }
+            for y in report.yanked_findings
+        ],
+        "unpinned_projects": list(report.unpinned_projects),
+    }
+    return json.dumps(payload, indent=2)

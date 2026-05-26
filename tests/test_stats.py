@@ -187,3 +187,57 @@ def test_compute_stats_empty_input():
     assert report.version_fragmentation == ()
     assert report.yanked_findings == ()
     assert report.unpinned_projects == ()
+
+
+# ---------- JSON renderer ----------
+
+import json
+from piptastic.render.json_out import render_stats_json
+
+
+def test_render_stats_json_schema_and_kind():
+    audits = [_make_audit("a", [("requests", "==2.32.2", PS.PINNED, SD.NONE, False, "2.32.2")])]
+    report = compute_stats(audits, top=5, root=Path("/lab"))
+    out = render_stats_json(report)
+    parsed = json.loads(out)
+    assert parsed["schema_version"] == 1
+    assert parsed["kind"] == "stats"
+    # str(Path("/lab")) is OS-native — use as_posix for portable comparison.
+    assert parsed["root"] == Path("/lab").as_posix() or parsed["root"] == str(Path("/lab"))
+    assert parsed["totals"]["project_count"] == 1
+    assert parsed["totals"]["total_deps"] == 1
+
+
+def test_render_stats_json_full_shape():
+    audits = [
+        _make_audit("phishing_catcher", [
+            ("python-levenshtein", "==0.12.0", PS.PINNED, SD.MAJOR, True, "0.27.3"),
+            ("flask", "==3.0.2", PS.PINNED, SD.MAJOR, False, "3.1.0"),
+        ]),
+        _make_audit("other", [
+            ("python-levenshtein", "==0.27.0", PS.PINNED, SD.PATCH, False, "0.27.3"),
+        ]),
+    ]
+    report = compute_stats(audits, top=5, root=Path("/lab"))
+    out = render_stats_json(report)
+    parsed = json.loads(out)
+
+    # Histograms present
+    assert parsed["totals"]["drift_histogram"]["major"] == 2
+    assert parsed["totals"]["pin_status_histogram"]["pinned"] == 3
+
+    # Top packages: python-levenshtein appears in 2 projects, flask in 1
+    top_names = [p["name"] for p in parsed["top_packages"]]
+    assert top_names[0] == "python-levenshtein"
+
+    # Version fragmentation: python-levenshtein has 2 distinct == pins
+    frag_names = [v["name"] for v in parsed["version_fragmentation"]]
+    assert "python-levenshtein" in frag_names
+
+    # Yanked findings preserve all 5 fields
+    assert len(parsed["yanked_findings"]) == 1
+    yf = parsed["yanked_findings"][0]
+    assert yf["project_name"] == "phishing_catcher"
+    assert yf["package_name"] == "python-levenshtein"
+    assert yf["pinned_version"] == "0.12.0"
+    assert yf["latest_non_yanked"] == "0.27.3"
