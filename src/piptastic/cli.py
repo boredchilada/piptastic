@@ -20,7 +20,8 @@ from piptastic.discovery import discover_one, discover_tree
 from piptastic.logging import configure_logging, get_logger
 from piptastic.models import ProjectAudit, SemverDrift
 from piptastic.pypi import PyPIClient
-from piptastic.render import render_json, render_terminal
+from piptastic.render import render_json, render_stats_json, render_stats_terminal, render_terminal
+from piptastic.stats import compute_stats
 from piptastic.update import update_project
 
 logger = get_logger(__name__)
@@ -44,7 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--summary", action="store_true", help="One row per project")
     audit.add_argument("--json", action="store_true", help="Machine-readable JSON to stdout")
     audit.add_argument("--include-prereleases", action="store_true")
-    audit.add_argument("--exclude", action="append", default=[], help="Glob pattern, repeatable")
+    audit.add_argument(
+        "--exclude", action="append", default=[],
+        help="Glob pattern matched against directory BASENAMES (not paths), repeatable",
+    )
     audit.add_argument("--no-cache", action="store_true")
     audit.add_argument("--refresh-cache", action="store_true")
     audit.add_argument("--cache-ttl", type=int, default=3600)
@@ -68,6 +72,23 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("--no-test", action="store_true")
     upd.add_argument("--refresh", action="store_true")
     upd.add_argument("--temp-test-env", action="store_true")
+
+    # stats
+    stats = sub.add_parser(
+        "stats",
+        help="Cross-project rollup (top packages, fragmentation, yanked, etc.)",
+    )
+    stats.add_argument("path", type=Path)
+    stats.add_argument("--top", type=int, default=20, help="Top N packages (default: 20)")
+    stats.add_argument("--json", action="store_true", help="Machine-readable JSON to stdout")
+    stats.add_argument(
+        "--exclude", action="append", default=[],
+        help="Glob pattern matched against directory BASENAMES (not paths), repeatable",
+    )
+    stats.add_argument("--no-cache", action="store_true")
+    stats.add_argument("--refresh-cache", action="store_true")
+    stats.add_argument("--cache-ttl", type=int, default=3600)
+    stats.add_argument("--concurrency", type=int, default=8)
 
     # bootstrap
     boot = sub.add_parser(
@@ -114,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_update(args)
         if args.command == "bootstrap":
             return _cmd_bootstrap(args)
+        if args.command == "stats":
+            return _cmd_stats(args)
     except Exception as e:  # last-resort guard so we never traceback at the user
         logger.exception("unhandled error: %s", e)
         return 1
@@ -306,4 +329,37 @@ def _cmd_bootstrap(args) -> int:
     print(f"  captured {len(lines)} deps from {chosen}")
     if plumbing_count:
         print(f"  skipped {plumbing_count} plumbing distributions")
+    return 0
+
+
+def _cmd_stats(args) -> int:
+    path = args.path.resolve()
+    if not path.exists():
+        logger.error("path does not exist: %s", path)
+        return 1
+
+    single = discover_one(path)
+    if single is not None:
+        projects = [single]
+    else:
+        projects = discover_tree(path, exclude=args.exclude)
+    if not projects:
+        logger.error("no Python projects found at %s", path)
+        return 1
+
+    client = _build_client(args)
+    current_py = Version(".".join(str(x) for x in sys.version_info[:3]))
+    audits = []
+    for p in projects:
+        try:
+            audits.append(audit_project(p, client, current_python=current_py))
+        except Exception as e:
+            logger.warning("failed to audit %s: %s", p.name, e)
+
+    report = compute_stats(audits, top=args.top, root=path)
+
+    if args.json:
+        print(render_stats_json(report))
+    else:
+        render_stats_terminal(report)
     return 0

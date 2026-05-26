@@ -135,3 +135,43 @@ def test_bootstrap_ambiguous_venv(tmp_path):
     build_fake_venv(project / "venv", packages={"flask": "3.0.2"})
     exit_code = main(["bootstrap", str(project)])
     assert exit_code == 1
+
+
+def test_stats_subcommand_smoke(monkeypatch, capsys, tmp_path):
+    """Stats produces a non-empty terminal report against fixtures with a
+    monkey-patched PyPI client."""
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names):
+            return {}
+        def fetch_one(self, name):
+            return None
+
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+
+    exit_code = main(["stats", str(FIXTURES / "req_only")])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    # Smoke: stats header and some content present
+    assert "piptastic stats" in captured.out
+    assert "1 projects" in captured.out  # single-project audit produces a 1-project stats
+
+
+def test_stats_json_smoke(monkeypatch, capsys):
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+
+    exit_code = main(["stats", str(FIXTURES), "--json"])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    import json as _json
+    payload = _json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert payload["kind"] == "stats"
+    assert payload["totals"]["project_count"] >= 1
