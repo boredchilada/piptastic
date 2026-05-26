@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 
 from packaging.markers import Marker
@@ -12,7 +12,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 
-class SemverDrift(StrEnum):
+class SemverDrift(str, Enum):
     NONE = "none"
     BUILD = "build"
     PATCH = "patch"
@@ -21,8 +21,11 @@ class SemverDrift(StrEnum):
     EPOCH = "epoch"
     UNKNOWN = "unknown"
 
+    def __str__(self) -> str:
+        return self.value
 
-class PinStatus(StrEnum):
+
+class PinStatus(str, Enum):
     PINNED = "pinned"
     COMPATIBLE = "compatible"
     RANGE = "range"
@@ -30,14 +33,20 @@ class PinStatus(StrEnum):
     UNPINNED = "unpinned"
     URL = "url"
 
+    def __str__(self) -> str:
+        return self.value
 
-class SourceKind(StrEnum):
+
+class SourceKind(str, Enum):
     REQUIREMENTS_TXT = "requirements_txt"
     CONSTRAINTS_TXT = "constraints_txt"
     PYPROJECT_PEP621 = "pyproject_pep621"
     PYPROJECT_POETRY = "pyproject_poetry"
     PIPFILE = "pipfile"
     PIPFILE_LOCK = "pipfile_lock"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 @dataclass(frozen=True)
