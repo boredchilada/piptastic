@@ -231,3 +231,26 @@ def test_parse_pipfile_lock_default():
     names = {d.name for d in deps}
     assert names == {"flask", "requests", "httpx"}
     assert _by_name(deps, "flask").specifier == SpecifierSet("==3.0.2")
+
+
+def test_parse_pyproject_poetry_edges():
+    src = DepSource(
+        kind=SourceKind.PYPROJECT_POETRY,
+        path=FIXTURES / "pyproject_poetry_edges" / "pyproject.toml",
+        group="default",
+    )
+    deps = parse_source(src)
+    by_name = {d.name: d for d in deps}
+
+    # Defect 1: ^0.0.0 -> >=0.0.0,<0.0.1
+    assert by_name["zerocap"].specifier == SpecifierSet(">=0.0.0,<0.0.1")
+
+    # Defect 2: bare "3.0.2" -> caret behaviour
+    assert by_name["bare-caret"].specifier == SpecifierSet(">=3.0.2,<4.0.0")
+
+    # Defect 3: per-dep python ^3.10 -> conjunction of marker clauses
+    sm = by_name["shorthand-marker"]
+    assert sm.marker is not None
+    marker_str = str(sm.marker)
+    assert 'python_version >= "3.10"' in marker_str
+    assert 'python_version < "4.0.0"' in marker_str

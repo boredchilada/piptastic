@@ -216,13 +216,17 @@ def _poetry_to_pep508(name: str, value: Any) -> str | None:
 
     extras_part = f"[{','.join(extras)}]" if extras else ""
     marker_part = (
-        f"; python_version {_python_constraint_to_marker(marker)}" if marker else ""
+        f"; {_python_constraint_to_marker(marker)}" if marker else ""
     )
     return f"{name}{extras_part}{spec}{marker_part}"
 
 
 def _poetry_version_to_specifier(v: str) -> str:
-    """Convert Poetry version shorthand to a PEP 440 specifier string."""
+    """Convert Poetry version shorthand to a PEP 440 specifier string.
+
+    Per Poetry: "If you don't specify any operator, then it implies caret
+    notation." So bare strings like ``"3.0.2"`` are treated as ``^3.0.2``.
+    """
     v = v.strip()
     if v == "*" or v == "":
         return ""
@@ -230,14 +234,21 @@ def _poetry_version_to_specifier(v: str) -> str:
         return _caret_to_specifier(v[1:])
     if v.startswith("~"):
         return _tilde_to_specifier(v[1:])
-    # plain version, or already a PEP 440-style range
+    # already a PEP 440-style range
     if v[:1] in (">", "<", "=", "!"):
         return v
-    return f"=={v}"
+    # bare version: Poetry treats this as implicit caret
+    return _caret_to_specifier(v)
 
 
 def _caret_to_specifier(base: str) -> str:
-    """`^X.Y.Z` -> `>=X.Y.Z,<(X+1).0.0`. `^0.Y.Z` -> `>=0.Y.Z,<0.(Y+1).0`."""
+    """`^X.Y.Z` -> `>=X.Y.Z,<(X+1).0.0`. `^0.Y.Z` -> `>=0.Y.Z,<0.(Y+1).0`.
+
+    Per Poetry's documented rule, the upper-bound cap is placed on the
+    rightmost non-zero component. When every component is zero (e.g. `^0.0.0`),
+    the cap is placed on the rightmost component supplied -- so `^0.0.0`
+    becomes `>=0.0.0,<0.0.1` (not `==0.0.0`).
+    """
     parts = _split_version(base)
     if not parts:
         return ""
@@ -249,8 +260,8 @@ def _caret_to_specifier(base: str) -> str:
                 upper[j] = 0
             break
     else:
-        # all zeros -> behave like ==
-        return f"=={base}"
+        # all zeros -> bump the rightmost component (Poetry's documented rule)
+        upper[-1] = upper[-1] + 1
     while len(upper) < 3:
         upper.append(0)
     return f">={base},<{'.'.join(str(x) for x in upper)}"
@@ -288,17 +299,37 @@ def _split_version(v: str) -> list[int]:
 
 
 def _python_constraint_to_marker(value: str) -> str:
-    """Map a Poetry `python = ">=3.10"` to a PEP 508 marker tail.
+    """Map a Poetry per-dep `python = "<spec>"` to a PEP 508 marker expression.
 
-    Returns the comparison + quoted version, e.g. `>= "3.10"`. The caller
-    prefixes this with `python_version `.
+    Returns one or more ``python_version <op> "<ver>"`` clauses joined by
+    `` and ``. Poetry shorthand (``^``, ``~``, or a bare version) is first
+    normalized via ``_poetry_version_to_specifier`` so it becomes a PEP 440
+    specifier list, then each comma-separated piece is emitted as its own
+    clause. Plain operator-prefixed forms (``>=3.10``, ``<3.13``, ...) are
+    handled in a single clause.
     """
     v = value.strip()
-    if v.startswith((">=", "<=", "==", "!=")):
-        return f'{v[:2]} "{v[2:].strip()}"'
-    if v.startswith((">", "<")):
-        return f'{v[:1]} "{v[1:].strip()}"'
-    return f'== "{v}"'
+    # Shorthand or bare version -> expand via Poetry's caret/tilde rules,
+    # then split the resulting PEP 440 spec list into per-clause markers.
+    if v.startswith(("^", "~")) or (v[:1] not in (">", "<", "=", "!", "")):
+        spec = _poetry_version_to_specifier(v)
+        if not spec:
+            return ""
+        clauses = [_one_python_clause(piece) for piece in spec.split(",")]
+        return " and ".join(c for c in clauses if c)
+    return _one_python_clause(v)
+
+
+def _one_python_clause(piece: str) -> str:
+    """Render a single PEP 440 spec atom as a ``python_version`` marker clause."""
+    piece = piece.strip()
+    if not piece:
+        return ""
+    if piece.startswith((">=", "<=", "==", "!=")):
+        return f'python_version {piece[:2]} "{piece[2:].strip()}"'
+    if piece.startswith((">", "<")):
+        return f'python_version {piece[:1]} "{piece[1:].strip()}"'
+    return f'python_version == "{piece}"'
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

@@ -1,0 +1,12 @@
+[tool.poetry]
+name = "demo-edges"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+# Defect 1: caret on all-zero base
+zerocap = "^0.0.0"
+# Defect 2: bare version = implicit caret
+bare-caret = "3.0.2"
+# Defect 3: per-dep python shorthand
+shorthand-marker = { version = ">=1.0", python = "^3.10" }
