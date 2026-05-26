@@ -171,3 +171,74 @@ def test_render_json_pinning_score_can_be_none():
     out = render_json([pa], root=Path("/p"))
     parsed = json.loads(out)
     assert parsed["projects"][0]["pinning_score"] is None
+
+
+def test_render_terminal_does_not_raise(capsys):
+    from rich.console import Console
+    from piptastic.render import render_terminal
+
+    audit = _make_audit()
+    console = Console(record=True, no_color=True)
+    render_terminal([audit], mode="tree", console=console)
+    render_terminal([audit], mode="table", console=console)
+    render_terminal([audit], mode="summary", console=console)
+    # If we got here, no exception. Spot-check that project name appeared.
+    output = console.export_text()
+    assert "webapp" in output
+
+
+def test_render_terminal_handles_none_pin_score(capsys):
+    """A project with pinning_score=None must render as 'n/a' without crashing."""
+    from rich.console import Console
+    from pathlib import Path
+    from packaging.specifiers import SpecifierSet
+    from piptastic.models import (
+        Dep, DepAudit, DepSource, PinStatus, Project, ProjectAudit,
+        SemverDrift, SourceKind,
+    )
+    from piptastic.render import render_terminal
+
+    src = DepSource(
+        kind=SourceKind.REQUIREMENTS_TXT,
+        path=Path("/p/requirements.txt"),
+        group="default",
+    )
+    dep = Dep(
+        name="repo", raw_name="repo", specifier=SpecifierSet(),
+        extras=frozenset(), marker=None, source=src, line_no=1,
+        url="git+https://example/repo",
+    )
+    audit = DepAudit(
+        dep=dep, installed=None, latest=None,
+        latest_including_prereleases=None,
+        drift=SemverDrift.UNKNOWN, pin_status=PinStatus.URL,
+        yanked=False, warnings=(),
+    )
+    project = Project(
+        name="p", path=Path("/p"),
+        python_version=None, python_source=None, python_constraints=None,
+        dep_sources=(src,),
+    )
+    pa = ProjectAudit(
+        project=project, deps=[audit], pinning_score=None,
+        drift_summary={}, yanked_count=0, pypi_unreachable=[],
+    )
+    console = Console(record=True, no_color=True)
+    # All three modes must handle None pin_score gracefully
+    render_terminal([pa], mode="tree", console=console)
+    render_terminal([pa], mode="table", console=console)
+    render_terminal([pa], mode="summary", console=console)
+    output = console.export_text()
+    assert "n/a" in output
+
+
+def test_render_terminal_empty():
+    """Empty project list produces a 'No Python projects found.' message,
+    not a crash."""
+    from rich.console import Console
+    from piptastic.render import render_terminal
+
+    console = Console(record=True, no_color=True)
+    render_terminal([], console=console)
+    output = console.export_text()
+    assert "No Python projects found" in output
