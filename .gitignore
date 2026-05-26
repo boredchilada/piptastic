@@ -19,6 +19,10 @@ htmlcov/
 venv/
 test_venv/
 .piptastic_test_*/
+# ...but keep the venv test fixture so discovery's pyvenv.cfg detection
+# has something real to detect.
+!tests/fixtures/venv_inside/.venv/
+!tests/fixtures/venv_inside/.venv/pyvenv.cfg
 
 # Editor
 .vscode/
