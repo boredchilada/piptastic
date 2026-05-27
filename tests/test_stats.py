@@ -200,7 +200,7 @@ def test_render_stats_json_schema_and_kind():
     report = compute_stats(audits, top=5, root=Path("/lab"))
     out = render_stats_json(report)
     parsed = json.loads(out)
-    assert parsed["schema_version"] == 1
+    assert parsed["schema_version"] == 2
     assert parsed["kind"] == "stats"
     # str(Path("/lab")) is OS-native — use as_posix for portable comparison.
     assert parsed["root"] == Path("/lab").as_posix() or parsed["root"] == str(Path("/lab"))

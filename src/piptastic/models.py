@@ -96,6 +96,14 @@ class PackageMetadata:
 
 
 @dataclass(frozen=True)
+class Vulnerability:
+    id: str
+    aliases: tuple[str, ...]
+    fix_versions: tuple[Version, ...]
+    description: str
+
+
+@dataclass(frozen=True)
 class DepAudit:
     dep: Dep
     installed: Version | None
@@ -105,6 +113,8 @@ class DepAudit:
     pin_status: PinStatus
     yanked: bool
     warnings: tuple[str, ...]
+    vulnerabilities: tuple[Vulnerability, ...] = ()
+    min_safe_version: Version | None = None
 
 
 @dataclass
@@ -115,6 +125,8 @@ class ProjectAudit:
     drift_summary: dict[SemverDrift, int] = field(default_factory=dict)
     yanked_count: int = 0
     pypi_unreachable: list[str] = field(default_factory=list)
+    vuln_count: int = 0
+    vuln_unreachable: list[str] = field(default_factory=list)
 
 
 # ---------- stats ----------

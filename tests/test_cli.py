@@ -36,13 +36,19 @@ def test_audit_json_smoke(tmp_path, monkeypatch, capsys):
         def fetch_one(self, name):
             return None
 
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs):
+            return {}
+
     monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
 
     exit_code = main(["audit", str(FIXTURES / "req_only"), "--json"])
     assert exit_code == 0
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["projects"][0]["name"] == "req_only"
 
 
@@ -148,7 +154,13 @@ def test_stats_subcommand_smoke(monkeypatch, capsys, tmp_path):
         def fetch_one(self, name):
             return None
 
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs):
+            return {}
+
     monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
 
     exit_code = main(["stats", str(FIXTURES / "req_only")])
     assert exit_code == 0
@@ -172,6 +184,6 @@ def test_stats_json_smoke(monkeypatch, capsys):
     captured = capsys.readouterr()
     import json as _json
     payload = _json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["kind"] == "stats"
     assert payload["totals"]["project_count"] >= 1

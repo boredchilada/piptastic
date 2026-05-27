@@ -20,8 +20,10 @@ from piptastic.models import (
     ProjectAudit,
     ReleaseInfo,
     SemverDrift,
+    Vulnerability,
 )
 from piptastic.parsing import parse_source
+from piptastic.vulns import compute_min_safe_version
 
 logger = get_logger(__name__)
 
@@ -38,6 +40,14 @@ PIN_WEIGHTS = {
 
 class _MetadataSource(Protocol):
     def fetch_many(self, names: Iterable[str]) -> dict[str, PackageMetadata]: ...
+
+
+class _VulnSource(Protocol):
+    unreachable: list[str]
+
+    def fetch_for(
+        self, pkgs: Iterable[tuple[str, "Version"]]
+    ) -> dict[tuple[str, str], tuple[Vulnerability, ...]]: ...
 
 
 # ---------- drift ----------
@@ -106,6 +116,7 @@ def audit_project(
     current_python: Version,
     *,
     include_prereleases: bool = False,
+    vuln_client: _VulnSource | None = None,
 ) -> ProjectAudit:
     deps = _collect_deps(project)
     target_python = _project_target_python(project, current_python)
@@ -114,15 +125,41 @@ def audit_project(
     metadata = client.fetch_many(names) if names else {}
     unreachable = [n for n in names if n not in metadata]
 
-    audits: list[DepAudit] = []
+    # Resolve a current version per dep first (needed for both drift and vuln lookup).
+    installed_by_name: dict[str, Version | None] = {}
+    current_for_drift_by_id: dict[int, Version | None] = {}
     for dep in deps:
         installed = _installed_version(dep.name)
+        installed_by_name[dep.name] = installed
+        current_for_drift_by_id[id(dep)] = _current_version_for_drift(dep, installed)
+
+    # Build the (name, version) set for the vuln lookup. Prefer the version
+    # used for drift (i.e. the == pin if any, else the locally-installed
+    # version). Skip URL deps and deps with no resolvable version.
+    vuln_results: dict[tuple[str, str], tuple[Vulnerability, ...]] = {}
+    vuln_unreachable: list[str] = []
+    if vuln_client is not None:
+        pairs: list[tuple[str, Version]] = []
+        for dep in deps:
+            if dep.url is not None:
+                continue
+            v = current_for_drift_by_id[id(dep)]
+            if v is None:
+                continue
+            pairs.append((dep.name, v))
+        if pairs:
+            vuln_results = vuln_client.fetch_for(pairs)
+            vuln_unreachable = list(vuln_client.unreachable)
+
+    audits: list[DepAudit] = []
+    for dep in deps:
+        installed = installed_by_name[dep.name]
         latest, latest_pre = _pick_latest(
             metadata.get(dep.name), target_python=target_python
         )
         # If the user asked for prereleases to count as "latest", swap them in.
         effective_latest = latest_pre if include_prereleases else latest
-        current_for_drift = _current_version_for_drift(dep, installed)
+        current_for_drift = current_for_drift_by_id[id(dep)]
         drift = classify_drift(current_for_drift, effective_latest)
         pin = classify_pin_status(dep.specifier, url=dep.url)
         warnings: list[str] = []
@@ -135,6 +172,17 @@ def audit_project(
 
         yanked = _is_pinned_version_yanked(dep, metadata.get(dep.name))
 
+        vulns: tuple[Vulnerability, ...] = ()
+        min_safe: Version | None = None
+        if current_for_drift is not None and dep.url is None:
+            vulns = vuln_results.get((dep.name, str(current_for_drift)), ())
+            if vulns:
+                min_safe = compute_min_safe_version(current_for_drift, vulns)
+                ids = ", ".join(v.id for v in vulns[:3])
+                if len(vulns) > 3:
+                    ids += f", +{len(vulns) - 3} more"
+                warnings.append(f"{len(vulns)} vulnerability(ies): {ids}")
+
         audits.append(DepAudit(
             dep=dep,
             installed=installed,
@@ -144,11 +192,14 @@ def audit_project(
             pin_status=pin,
             yanked=yanked,
             warnings=tuple(warnings),
+            vulnerabilities=vulns,
+            min_safe_version=min_safe,
         ))
 
     score = _pinning_score(audits)
     drift_summary = dict(Counter(a.drift for a in audits))
     yanked_count = sum(1 for a in audits if a.yanked)
+    vuln_count = sum(len(a.vulnerabilities) for a in audits)
 
     return ProjectAudit(
         project=project,
@@ -157,6 +208,8 @@ def audit_project(
         drift_summary=drift_summary,
         yanked_count=yanked_count,
         pypi_unreachable=unreachable,
+        vuln_count=vuln_count,
+        vuln_unreachable=vuln_unreachable,
     )
 
 

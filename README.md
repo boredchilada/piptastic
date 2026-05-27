@@ -3,12 +3,16 @@
 A read-only auditor for Python dependency files. Walks a directory tree,
 finds every project that declares dependencies (`requirements*.txt`,
 `pyproject.toml`, `Pipfile` / `Pipfile.lock`), resolves each declared
-version against PyPI, and reports how stale and how strictly pinned the
-declarations are.
+version against PyPI, and reports:
+
+- how stale and how strictly pinned the declarations are
+- which pinned versions have **known CVEs**, with the minimum safe
+  version to bump to (via [pip-audit](https://github.com/pypa/pip-audit))
 
 Also writes (when explicitly asked): `update` rewrites `requirements.txt`
-to the latest compatible pinned versions, `bootstrap` produces a
-`requirements.txt` from an existing venv.
+to the latest compatible pinned versions and, by default, lifts past any
+vulnerable ranges using pip-audit's fix-version data. `bootstrap`
+produces a `requirements.txt` from an existing venv.
 
 ## Install
 
@@ -22,8 +26,10 @@ Two entry points are installed: `piptastic` and `ptc` (short alias).
 Both invoke the same `main()`. Without installing, run the package
 directly: `python -m piptastic` (or `py -3.10 -m piptastic` on Windows).
 
-Runtime requirements: Python 3.10+, `packaging`, `rich`. `tomli` is
-pulled in on Python < 3.11.
+Runtime requirements: Python 3.10+, `packaging`, `rich`, `pip-audit`.
+`tomli` is pulled in on Python < 3.11. `pip-audit` is invoked as
+`python -m pip_audit` under the hood, so no shim or PATH entry is
+required.
 
 ## Quickstart
 
@@ -44,11 +50,11 @@ You'll see a table with one row per declared dependency:
 | my-flask-app  | requirements.. | default | requests   | (2.31.0) | 2.32.5 |
 | my-flask-app  | requirements.. | default | sqlalchemy | (2.0.30) | 2.0.43 |
 +------------------------------------------------------------------------------+
-   Drift | Pin    | Notes
-   ------+--------+-------
-   major | pinned |
-   minor | pinned |
-   patch | pinned |
+   Min safe | Drift | Pin    | Vulns | Notes
+   ---------+-------+--------+-------+----------------------------
+   3.1.0    | major | pinned |   2   | 2 vulnerability(ies): ...
+   2.32.4   | minor | pinned |   1   | 1 vulnerability(ies): ...
+   -        | patch | pinned |   0   |
 ```
 
 How to read each column:
@@ -57,12 +63,17 @@ How to read each column:
   parsed from a specifier like `flask==2.3.0`, not a lockfile).
 - **Latest** — newest non-prerelease on PyPI. Add `--include-prereleases`
   to include alphas/betas/rcs.
+- **Min safe** — the lowest fix-version (per pip-audit) that resolves
+  every advisory affecting the pinned version. `-` when no CVEs apply.
 - **Drift** — how far behind: `none`, `build`, `patch`, `minor`,
   `major`, or `epoch`. Colour-coded in your terminal.
 - **Pin** — the *shape* of the specifier: `pinned` (`==`),
   `compatible` (`~=`), `range` (`>=,<`), `floor` (`>=`), `unpinned`
   (no specifier), or `url`. See [Pin posture](#pin-posture).
-- **Notes** — yanked-release warnings and PyPI fetch errors.
+- **Vulns** — count of known CVEs / advisories affecting the pinned
+  version. Bold red when non-zero.
+- **Notes** — yanked-release warnings, PyPI fetch errors, and an
+  inline CVE summary (`N vulnerability(ies): GHSA-..., CVE-...`).
 
 Point it at a whole tree of projects:
 
@@ -78,18 +89,20 @@ piptastic audit ~/code --summary
 ```
 
 ```
-+-------------------------------------------------------------------------+
-| Project        |   Py | Pin score | Major | Minor | Patch | Yanked | Deps
-|----------------+------+-----------+-------+-------+-------+--------+-----
-| my-flask-app   | 3.11 |      100% |     1 |     1 |     1 |      0 |   3
-| ingestion-svc  | 3.12 |       60% |     0 |     2 |     5 |      1 |  12
-| legacy-cron    | 3.10 |        0% |     8 |     3 |     1 |      2 |  14
-+-------------------------------------------------------------------------+
++----------------------------------------------------------------------------------+
+| Project        |   Py | Pin score | Major | Minor | Patch | Yanked | Vulns | Deps
+|----------------+------+-----------+-------+-------+-------+--------+-------+-----
+| my-flask-app   | 3.11 |      100% |     1 |     1 |     1 |      0 |     3 |   3
+| ingestion-svc  | 3.12 |       60% |     0 |     2 |     5 |      1 |     0 |  12
+| legacy-cron    | 3.10 |        0% |     8 |     3 |     1 |      2 |    27 |  14
++----------------------------------------------------------------------------------+
 ```
 
 **Pin score** is the percent of non-URL deps that are `pinned` or
-`compatible`. Higher = stricter pinning. Use the drift columns to spot
-which projects are dragging.
+`compatible`. Higher = stricter pinning. **Vulns** is the rollup of
+known CVEs across all of a project's deps. Use the drift columns to
+spot which projects are dragging and the Vulns column to find security
+debt.
 
 That's the core loop: `audit` to look, `update` to act on a single
 project, `stats` to roll up across many, `bootstrap` to recover from a
@@ -131,15 +144,25 @@ stays compatible-release, a `>=` floor stays a floor, etc.), writes a
 backup alongside the file, runs a test install in a throwaway venv, and
 rolls back if the install fails.
 
+By default, also queries pip-audit for each `==` pin and lifts the bump
+target up to the **minimum safe version** if the current pin is
+covered by an open advisory. Bumps driven by a CVE are annotated in
+the output:
+
+```
+flask: 2.0.0 -> 2.2.5  (CVE floor: PYSEC-2023-62)
+```
+
 | Flag | Effect |
 | --- | --- |
 | `--no-test` | Skip the test-install step. |
-| `--refresh` | Bypass the PyPI cache (equivalent to `--refresh-cache` on audit). |
+| `--refresh` | Bypass the PyPI and vuln caches (equivalent to `--refresh-cache` on audit). |
 | `--temp-test-env` | Use a freshly created temporary venv for the test install (default reuses a cached one under `~/.cache/piptastic/`). |
+| `--no-apply-cve-floor` | Don't consult pip-audit during update; pick latest non-yanked as usual. The CVE floor is **on by default**. |
 
 Pass package names as positional args to limit updates to those
-distributions. Only `requirements.txt`-family files are mutated in v0.2;
-`pyproject.toml` and `Pipfile` are not yet rewritten.
+distributions. Only `requirements.txt`-family files are mutated in
+v0.3; `pyproject.toml` and `Pipfile` are not yet rewritten.
 
 ### `stats <path>`
 
@@ -223,6 +246,40 @@ piptastic update . --refresh
 `update` only touches `requirements*.txt`-family files in v0.2.
 `pyproject.toml` and `Pipfile` are not rewritten yet.
 
+### "Which of my projects have known CVEs?"
+
+```bash
+piptastic audit ~/code --summary
+```
+
+The **Vulns** column on the summary rolls up every advisory pip-audit
+knows about for the pinned versions in each project. Drill into a
+specific project to see which packages are affected and what to bump
+to:
+
+```bash
+piptastic audit ~/code/legacy-cron --table
+```
+
+Look at the **Min safe** column — that's the lowest version that
+resolves every advisory affecting the current pin. To actually apply
+those bumps:
+
+```bash
+piptastic update ~/code/legacy-cron
+```
+
+The CVE floor is on by default. Pass `--no-apply-cve-floor` if you
+want pure "latest non-yanked" behavior instead.
+
+For pipeline consumption, the JSON output includes the full
+`vulnerabilities[]` array per dep:
+
+```bash
+piptastic audit ~/code --json | \
+  jq '.projects[] | {name, vuln_count, vulnerable_deps: [.deps[] | select(.vulnerabilities | length > 0) | {name, current, min_safe_version, vulns: [.vulnerabilities[].id]}]}'
+```
+
 ### "Block stale-dep PRs in CI"
 
 ```bash
@@ -291,8 +348,8 @@ For dashboards or further processing:
 piptastic stats ~/code --json > stats.json
 ```
 
-The schema is stable (`schema_version=1`) — safe to parse from
-scripts.
+The schema is stable (`schema_version=2` as of v0.3) — safe to parse
+from scripts.
 
 ### "Audit a project before installing it"
 
@@ -315,6 +372,39 @@ write to stdout, so redirect with `> file.json` or pipe directly:
 ```bash
 piptastic audit ~/code --json | jq '.projects[] | select(.pin_score < 50)'
 ```
+
+## Vulnerability lookups
+
+Every `audit` run queries [pip-audit](https://github.com/pypa/pip-audit)
+in addition to PyPI metadata. pip-audit is invoked as `python -m
+pip_audit -r <tempfile> --format json --no-deps --disable-pip` against
+the resolved `(name, version)` pairs piptastic already knows about, so
+there is no separate dependency-resolution step and no network round
+trip per package — one subprocess call per audit (or two, if some
+packages have multiple pinned versions across files within the tree).
+
+Results attach to each dep:
+
+- `vulnerabilities` — list of advisories from pip-audit, including
+  GHSA / PYSEC / CVE identifiers, aliases, fix versions, and the
+  upstream description.
+- `min_safe_version` — the **maximum** of the per-advisory minimum
+  fix-versions newer than the installed pin. Bumping to this version
+  resolves every known advisory. `None` when there are no advisories
+  or when no known fix is newer than the current pin.
+
+Per-project rollup on `ProjectAudit`:
+
+- `vuln_count` — total advisories across all deps.
+- `vuln_unreachable` — packages where pip-audit failed to return a
+  status. These are surfaced as "unknown" rather than silently treated
+  as clean. If pip-audit is not installed or not callable as `python
+  -m pip_audit`, every dep ends up here.
+
+The vuln cache lives at `~/.cache/piptastic/vulns/` (overridable via
+`PIPTASTIC_CACHE_DIR`). Keys are `sha1(name|version)`; the empty-vulns
+result for a clean package is cached too, so subsequent audits don't
+re-invoke pip-audit for known-good pins.
 
 ## Project discovery
 
@@ -384,7 +474,7 @@ ref, which the auditor can't reliably tell.
 
 ## JSON schema
 
-Both `audit --json` and `stats --json` emit `schema_version: 1`. The
+Both `audit --json` and `stats --json` emit `schema_version: 2`. The
 shape is intended to be stable across patch releases of piptastic;
 breaking changes will bump `schema_version`. Top-level discriminator
 is `kind`:
@@ -392,20 +482,58 @@ is `kind`:
 - `kind: "audit"` — emitted by `audit --json`.
 - `kind: "stats"` — emitted by `stats --json`.
 
+### Per-dep fields (audit)
+
+```json
+{
+  "name": "flask",
+  "current": "2.0.0",
+  "latest": "3.0.4",
+  "drift": "major",
+  "pin_status": "pinned",
+  "yanked": false,
+  "vulnerabilities": [
+    {
+      "id": "PYSEC-2023-62",
+      "aliases": ["CVE-2023-30861", "GHSA-m2qf-hxjv-5gpq"],
+      "fix_versions": ["2.2.5", "2.3.2"],
+      "description": "Flask session cookie issue ..."
+    }
+  ],
+  "min_safe_version": "2.2.5",
+  "warnings": ["1 vulnerability(ies): PYSEC-2023-62"]
+}
+```
+
+### Per-project fields (audit)
+
+`pinning_score`, `drift_summary`, `yanked_count`, `pypi_unreachable`,
+**`vuln_count`**, **`vuln_unreachable`**.
+
+### Schema version history
+
+| Version | Change |
+| --- | --- |
+| `1` | Initial public schema (v0.2). |
+| `2` | Adds `vulnerabilities[]` and `min_safe_version` per dep; adds `vuln_count` and `vuln_unreachable` per project. |
+
 Diff the schema against your dashboard / CI consumer before upgrading
 across a minor version bump.
 
 ## Caching
 
-PyPI metadata is cached on disk. Default location:
+PyPI metadata and pip-audit results are cached on disk in separate
+directories.
 
-- POSIX: `$XDG_CACHE_HOME/piptastic/pypi/`, falling back to
-  `~/.cache/piptastic/pypi/`.
-- Windows: `%LOCALAPPDATA%\piptastic\pypi\`.
+| Source | POSIX default | Windows default |
+| --- | --- | --- |
+| PyPI metadata | `$XDG_CACHE_HOME/piptastic/pypi/` → `~/.cache/piptastic/pypi/` | `%USERPROFILE%\.cache\piptastic\pypi\` |
+| pip-audit results | `$XDG_CACHE_HOME/piptastic/vulns/` → `~/.cache/piptastic/vulns/` | `%USERPROFILE%\.cache\piptastic\vulns\` |
 
-Override with `PIPTASTIC_CACHE_DIR=<path>`. Default TTL is 3600s
-(1h). Cache entries are per-distribution JSON blobs; safe to delete
-the directory at any time.
+Override the parent with `PIPTASTIC_CACHE_DIR=<path>`. Default TTL is
+3600s (1h) for both. PyPI entries are per-distribution JSON; vuln
+entries are per-`(name, version)` JSON (including the empty result for
+clean pins). Safe to delete either directory at any time.
 
 ## Logging
 
@@ -422,17 +550,17 @@ stderr.
 | `1` | Operational failure: path doesn't exist, no Python projects found, malformed input, PyPI totally unreachable, or `--fail-on-drift` threshold tripped. |
 | `2` | `update` test-install failed; the requirements file was rolled back from its backup. |
 
-## Not in v0.2
+## Not in v0.3
 
-These are deferred. None are committed to a v0.3 release date.
+These are deferred. None are committed to a future release date.
 
 - Watch/daemon mode.
-- CVE / security advisory lookups (OSV.dev integration).
 - Lockfile-drift detection (`Pipfile` ↔ `Pipfile.lock`, `poetry.lock`,
   `uv.lock`).
 - HTML report output.
 - `setup.py` / `setup.cfg` parsing.
 - `update` for `pyproject.toml` and `Pipfile`.
+- `--fail-on-vuln` CI gate (currently `--fail-on-drift` only).
 
 ## License
 

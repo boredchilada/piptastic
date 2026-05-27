@@ -10,7 +10,7 @@ from typing import Iterable
 
 from piptastic.models import DepAudit, ProjectAudit, SemverDrift
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def render_json(audits: Iterable[ProjectAudit], *, root: Path) -> str:
@@ -38,6 +38,8 @@ def _project_to_dict(pa: ProjectAudit) -> dict:
         "drift_summary": {k.value: v for k, v in pa.drift_summary.items()},
         "yanked_count": pa.yanked_count,
         "pypi_unreachable": pa.pypi_unreachable,
+        "vuln_count": pa.vuln_count,
+        "vuln_unreachable": pa.vuln_unreachable,
         "sources": [
             {"kind": s.kind.value, "path": str(s.path), "group": s.group}
             for s in p.dep_sources
@@ -74,6 +76,16 @@ def _dep_to_dict(da: DepAudit) -> dict:
         "drift": da.drift.value,
         "yanked": da.yanked,
         "warnings": list(da.warnings),
+        "vulnerabilities": [
+            {
+                "id": v.id,
+                "aliases": list(v.aliases),
+                "fix_versions": [str(f) for f in v.fix_versions],
+                "description": v.description,
+            }
+            for v in da.vulnerabilities
+        ],
+        "min_safe_version": str(da.min_safe_version) if da.min_safe_version else None,
     }
 
 

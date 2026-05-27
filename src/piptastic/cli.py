@@ -24,6 +24,7 @@ from piptastic.pypi import PyPIClient
 from piptastic.render import render_json, render_stats_json, render_stats_terminal, render_terminal
 from piptastic.stats import compute_stats
 from piptastic.update import update_project
+from piptastic.vulns import VulnClient
 
 logger = get_logger(__name__)
 
@@ -73,6 +74,19 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("--no-test", action="store_true")
     upd.add_argument("--refresh", action="store_true")
     upd.add_argument("--temp-test-env", action="store_true")
+    upd.add_argument(
+        "--apply-cve-floor",
+        dest="apply_cve_floor",
+        action="store_true",
+        default=True,
+        help="Use pip-audit fix_versions as a floor when bumping pins (default)",
+    )
+    upd.add_argument(
+        "--no-apply-cve-floor",
+        dest="apply_cve_floor",
+        action="store_false",
+        help="Disable the CVE-aware floor; pick latest non-yanked release as usual",
+    )
 
     # stats
     stats = sub.add_parser(
@@ -156,6 +170,16 @@ def _build_client(args) -> PyPIClient:
     return PyPIClient(ttl_seconds=ttl, concurrency=getattr(args, "concurrency", 8))
 
 
+def _build_vuln_client(args) -> VulnClient:
+    if getattr(args, "no_cache", False):
+        ttl = 0
+    elif getattr(args, "refresh_cache", False):
+        ttl = 0
+    else:
+        ttl = getattr(args, "cache_ttl", 3600)
+    return VulnClient(ttl_seconds=ttl, concurrency=getattr(args, "concurrency", 8))
+
+
 def _cmd_audit(args) -> int:
     path = args.path.resolve()
     if not path.exists():
@@ -173,13 +197,20 @@ def _cmd_audit(args) -> int:
         return 1
 
     client = _build_client(args)
+    vuln_client = _build_vuln_client(args)
     current_py = Version(".".join(str(x) for x in sys.version_info[:3]))
     include_pre = getattr(args, "include_prereleases", False)
     audits = []
     for p in projects:
         try:
             audits.append(
-                audit_project(p, client, current_python=current_py, include_prereleases=include_pre)
+                audit_project(
+                    p,
+                    client,
+                    current_python=current_py,
+                    include_prereleases=include_pre,
+                    vuln_client=vuln_client,
+                )
             )
         except Exception as e:
             # One bad project must not kill the whole tree scan.
@@ -220,6 +251,7 @@ def _cmd_update(args) -> int:
         return 1
 
     client = PyPIClient(ttl_seconds=0 if args.refresh else 3600)
+    vuln_client = VulnClient(ttl_seconds=0 if args.refresh else 3600) if args.apply_cve_floor else None
     results = update_project(
         project,
         packages=args.packages or None,
@@ -227,6 +259,8 @@ def _cmd_update(args) -> int:
         refresh=args.refresh,
         use_temp_test_env=args.temp_test_env,
         client=client,
+        vuln_client=vuln_client,
+        apply_cve_floor=args.apply_cve_floor,
     )
 
     any_changes = False
@@ -234,8 +268,11 @@ def _cmd_update(args) -> int:
     for r in results:
         if r.changes:
             any_changes = True
-            for name, old, new in r.changes:
-                print(f"  {name}: {old or '(unpinned)'} -> {new}")
+            for change in r.changes:
+                name, old, new = change[0], change[1], change[2]
+                note = change[3] if len(change) > 3 else ""
+                suffix = f"  ({note})" if note else ""
+                print(f"  {name}: {old or '(unpinned)'} -> {new}{suffix}")
         if r.tested and not r.test_passed:
             rollback = True
             print(f"[piptastic] test install failed; rolled back {r.requirements_file}")
@@ -353,6 +390,7 @@ def _cmd_stats(args) -> int:
     audits = []
     for p in projects:
         try:
+            # stats does not need vuln data — keep it fast.
             audits.append(audit_project(p, client, current_python=current_py))
         except Exception as e:
             logger.warning("failed to audit %s: %s", p.name, e)

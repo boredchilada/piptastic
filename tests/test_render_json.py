@@ -67,7 +67,7 @@ def _make_audit() -> ProjectAudit:
 def test_render_json_schema_version():
     out = render_json([_make_audit()], root=Path("/projects"))
     parsed = json.loads(out)
-    assert parsed["schema_version"] == 1
+    assert parsed["schema_version"] == 2
 
 
 def test_render_json_project_shape():

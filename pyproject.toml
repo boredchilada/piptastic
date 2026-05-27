@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "piptastic"
-version = "0.2.0"
-description = "Audit Python dependency posture across all projects in a tree."
+version = "0.3.0"
+description = "Audit Python dependency posture and known CVEs across all projects in a tree."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0-or-later"
@@ -29,6 +29,7 @@ dependencies = [
     "packaging>=23.0",
     "rich>=13.0",
     "tomli>=2.0; python_version < '3.11'",
+    "pip-audit>=2.7",
 ]
 
 [project.optional-dependencies]

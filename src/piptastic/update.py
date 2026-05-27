@@ -24,6 +24,7 @@ from packaging.version import Version
 from piptastic.logging import get_logger
 from piptastic.models import Project, SourceKind
 from piptastic.pypi import PyPIClient
+from piptastic.vulns import VulnClient, compute_min_safe_version
 
 logger = get_logger(__name__)
 
@@ -32,7 +33,8 @@ logger = get_logger(__name__)
 class UpdateResult:
     requirements_file: Path
     backup_file: Path | None
-    changes: list[tuple[str, str, str]]  # (name, old, new)
+    # (name, old, new) or (name, old, new, note) when a CVE drove the bump.
+    changes: list[tuple]
     tested: bool
     test_passed: bool
 
@@ -45,6 +47,8 @@ def update_project(
     refresh: bool = False,
     use_temp_test_env: bool = False,
     client: PyPIClient | None = None,
+    vuln_client: VulnClient | None = None,
+    apply_cve_floor: bool = True,
 ) -> list[UpdateResult]:
     """Update each requirements*.txt source in `project`.
 
@@ -52,6 +56,8 @@ def update_project(
     sources are skipped with an info-level message.
     """
     client = client or PyPIClient(ttl_seconds=0 if refresh else 3600)
+    if apply_cve_floor and vuln_client is None:
+        vuln_client = VulnClient(ttl_seconds=0 if refresh else 3600)
     only = {canonicalize_name(p) for p in packages} if packages else None
 
     results: list[UpdateResult] = []
@@ -59,7 +65,10 @@ def update_project(
         if src.kind not in (SourceKind.REQUIREMENTS_TXT, SourceKind.CONSTRAINTS_TXT):
             logger.info("update: skipping %s (only requirements*.txt is writeable in v0.2)", src.path)
             continue
-        results.append(_update_one_file(src.path, only, client, test, use_temp_test_env, project.path))
+        results.append(_update_one_file(
+            src.path, only, client, test, use_temp_test_env, project.path,
+            vuln_client if apply_cve_floor else None,
+        ))
     return results
 
 
@@ -70,14 +79,15 @@ def _update_one_file(
     test: bool,
     use_temp_test_env: bool,
     project_root: Path,
+    vuln_client: VulnClient | None,
 ) -> UpdateResult:
     backup = _create_backup(req_path, project_root)
     lines = req_path.read_text(encoding="utf-8").splitlines()
-    changes: list[tuple[str, str, str]] = []
+    changes: list[tuple] = []
 
     new_lines = []
     for line in lines:
-        new_line, change = _maybe_update_line(line, only, client)
+        new_line, change = _maybe_update_line(line, only, client, vuln_client)
         new_lines.append(new_line)
         if change is not None:
             changes.append(change)
@@ -112,8 +122,11 @@ _LINE_RE = re.compile(
 
 
 def _maybe_update_line(
-    line: str, only: set[str] | None, client: PyPIClient
-) -> tuple[str, tuple[str, str, str] | None]:
+    line: str,
+    only: set[str] | None,
+    client: PyPIClient,
+    vuln_client: VulnClient | None = None,
+) -> tuple[str, tuple | None]:
     stripped = line.strip()
     if not stripped or stripped.startswith(("#", "-", "@")):
         return line, None
@@ -136,15 +149,46 @@ def _maybe_update_line(
         (r.version for r in md.releases if not r.yanked and not r.version.is_prerelease),
         default=None,
     )
-    if latest is None or str(latest) == ver:
+    if latest is None:
+        return line, None
+
+    note = ""
+    target = latest
+
+    # CVE floor: if the current pin has known vulnerabilities, force the
+    # target up to min_safe_version when one exists.
+    if vuln_client is not None and ver:
+        try:
+            current_v = Version(ver)
+        except Exception:
+            current_v = None
+        if current_v is not None:
+            results = vuln_client.fetch_for([(canon, current_v)])
+            vulns = results.get((canon, str(current_v)), ())
+            if vulns:
+                min_safe = compute_min_safe_version(current_v, vulns)
+                ids = ", ".join(v.id for v in vulns[:2])
+                if len(vulns) > 2:
+                    ids += f", +{len(vulns) - 2}"
+                if min_safe is not None and min_safe > latest:
+                    target = min_safe
+                    note = f"CVE floor: {ids}"
+                elif min_safe is not None:
+                    note = f"CVE: {ids}"
+                else:
+                    note = f"CVE (no fix known): {ids}"
+
+    if str(target) == ver:
         return line, None
 
     extras_str = extras or ""
     tail_str = tail or ""
-    new = f"{name}{extras_str}=={latest}{tail_str}"
-    # Preserve leading whitespace (in case the line was indented)
+    new = f"{name}{extras_str}=={target}{tail_str}"
     leading_ws = line[:len(line) - len(line.lstrip())]
-    return f"{leading_ws}{new}", (canon, ver or "", str(latest))
+    change: tuple = (canon, ver or "", str(target))
+    if note:
+        change = (canon, ver or "", str(target), note)
+    return f"{leading_ws}{new}", change
 
 
 def _create_backup(req_path: Path, project_root: Path) -> Path:

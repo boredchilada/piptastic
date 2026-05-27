@@ -75,6 +75,7 @@ def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
     table.add_column("Minor", justify="right", style="orange3")
     table.add_column("Patch", justify="right", style="yellow")
     table.add_column("Yanked", justify="right", style="red")
+    table.add_column("Vulns", justify="right", style="bold red")
     table.add_column("Deps", justify="right")
 
     for a in audits:
@@ -86,6 +87,7 @@ def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
             str(a.drift_summary.get(SemverDrift.MINOR, 0)),
             str(a.drift_summary.get(SemverDrift.PATCH, 0)),
             str(a.yanked_count),
+            str(a.vuln_count),
             str(len(a.deps)),
         )
     console.print(table)
@@ -99,8 +101,10 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
     table.add_column("Package")
     table.add_column("Current")
     table.add_column("Latest")
+    table.add_column("Min safe")
     table.add_column("Drift")
     table.add_column("Pin")
+    table.add_column("Vulns", justify="right")
     table.add_column("Notes")
 
     for a in audits:
@@ -111,6 +115,9 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
                 notes = "yanked" + (f"; {notes}" if notes else "")
             current = _current_str(d)
             latest = str(d.latest) if d.latest else "-"
+            min_safe = str(d.min_safe_version) if d.min_safe_version else "-"
+            vuln_n = len(d.vulnerabilities)
+            vuln_cell = f"[bold red]{vuln_n}[/bold red]" if vuln_n else "-"
             table.add_row(
                 a.project.name,
                 d.dep.source.path.name,
@@ -118,8 +125,10 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
                 d.dep.name,
                 current,
                 latest,
+                min_safe,
                 drift_text,
                 d.pin_status.value,
+                vuln_cell,
                 notes,
             )
     console.print(table)
@@ -136,6 +145,8 @@ def _render_tree(audits: list[ProjectAudit], console: Console) -> None:
         )
         if a.yanked_count:
             header += f"   [red]yanked: {a.yanked_count}[/red]"
+        if a.vuln_count:
+            header += f"   [bold red]vulns: {a.vuln_count}[/bold red]"
         pnode = root.add(header)
         by_file: dict[str, list[DepAudit]] = {}
         for d in a.deps:
@@ -153,12 +164,17 @@ def _dep_line(d: DepAudit) -> str:
     current = _current_str(d)
     latest = str(d.latest) if d.latest else "-"
     yanked_mark = " [red strike]yanked[/red strike]" if d.yanked else ""
+    vuln_mark = ""
+    if d.vulnerabilities:
+        safe = f" min-safe {d.min_safe_version}" if d.min_safe_version else ""
+        vuln_mark = f"  [bold red]vulns: {len(d.vulnerabilities)}[/bold red]{safe}"
     return (
         f"{d.dep.name:<25} "
         f"{current:<14} -> {latest:<10}  "
         f"[{style}]{drift:<7}[/{style}]  "
         f"{d.pin_status.value}"
         f"{yanked_mark}"
+        f"{vuln_mark}"
     )
 
 
