@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """piptastic CLI — audit (default), list, update."""
 
 from __future__ import annotations

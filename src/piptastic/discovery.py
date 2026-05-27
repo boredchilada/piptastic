@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Walk a directory tree and emit Project records."""
 
 from __future__ import annotations

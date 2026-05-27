@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Drift classification, pin posture, and per-project audit rollup."""
 
 from __future__ import annotations

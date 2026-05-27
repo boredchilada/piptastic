@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Bootstrap a requirements.txt from a project's venv.
 
 Pure-data helpers here; the CLI handler does the file IO.
@@ -69,7 +70,7 @@ def is_self_install(dist, project_path: Path) -> bool:
         parsed = urlparse(url)
         if parsed.scheme != "file":
             return False
-        # urlparse gives us a path like '/F:/laboratory/...' on Windows
+        # urlparse gives us a path like '/C:/path/...' on Windows
         path_str = unquote(parsed.path).lstrip("/")
         # On POSIX the leading / was real; restore it
         if not path_str.startswith(("/", ".")) and ":" not in path_str[:3]:

@@ -8,14 +8,15 @@ version = "0.2.0"
 description = "Audit Python dependency posture across all projects in a tree."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{ name = "boredchilada" }]
 keywords = ["pip", "requirements", "dependencies", "audit", "watchtower"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",

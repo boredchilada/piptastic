@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Cross-project aggregation over a list of ProjectAudits."""
 
 from __future__ import annotations

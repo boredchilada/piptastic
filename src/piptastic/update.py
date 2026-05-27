@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Mutate a requirements.txt to pin packages to their latest compatible version.
 
 Only invoked from the `piptastic update` subcommand. Audit is read-only.

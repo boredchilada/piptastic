@@ -40,3 +40,8 @@ requirements_updates.log
 # piptastic dev cache (default location is ~/.cache/piptastic; this only
 # matters if someone overrides via env var to a path inside the repo)
 .piptastic_cache/
+
+# Internal planning docs (kept locally; published to private remote, not GitHub)
+docs/superpowers/
+# Legacy v0.1 predecessor (kept locally for reference, not shipped)
+archive/

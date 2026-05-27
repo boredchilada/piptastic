@@ -1,147 +1,241 @@
 # piptastic
 
-Audit Python dependency posture across all projects in a tree. Read-only by
-default — think Watchtower for your `requirements.txt` files.
+A read-only auditor for Python dependency files. Walks a directory tree,
+finds every project that declares dependencies (`requirements*.txt`,
+`pyproject.toml`, `Pipfile` / `Pipfile.lock`), resolves each declared
+version against PyPI, and reports how stale and how strictly pinned the
+declarations are.
+
+Also writes (when explicitly asked): `update` rewrites `requirements.txt`
+to the latest compatible pinned versions, `bootstrap` produces a
+`requirements.txt` from an existing venv.
 
 ## Install
 
 ```bash
 pip install .
-# or, for an isolated install with the CLI on PATH:
+# or, isolated install with the CLI on PATH:
 pipx install .
 ```
 
-Provides two commands: `piptastic` and `ptc` (short alias). Both are equivalent
-entry points — `ptc` is just a typing shortcut for ad-hoc shell use.
+Two entry points are installed: `piptastic` and `ptc` (short alias).
+Both invoke the same `main()`. Without installing, run the package
+directly: `python -m piptastic` (or `py -3.10 -m piptastic` on Windows).
 
-If you're running directly from a cloned repo without installing, use
-`python -m piptastic` (or `py -3.10 -m piptastic` on Windows) in place of the
-`piptastic` command shown in the examples below.
+Runtime requirements: Python 3.10+, `packaging`, `rich`. `tomli` is
+pulled in on Python < 3.11.
 
-## What it does
+## Commands
 
-Auto-discovers Python projects under a path and reports, per project:
+### `audit <path>`
 
-- **Drift** for every dependency: classified as `MAJOR` / `MINOR` / `PATCH` /
-  `BUILD` (the "nano" tier) / `NONE`, colored.
-- **Pinning posture**: `PINNED` / `COMPATIBLE` / `RANGE` / `FLOOR` /
-  `UNPINNED` / `URL`, with a 0-100% pin score per project (or `n/a` when a
-  project has only URL deps, which are deliberately excluded from the score
-  because URL pinning posture depends on the git ref).
-- **Yanked releases** that are still pinned.
-- **PyPI unreachability** so transient network issues don't silently masquerade
-  as "up to date".
+Read-only. Discovers Python projects under `<path>` and reports each
+dependency's pin posture and drift against PyPI.
 
-Supports `requirements.txt` family (including `-r` / `-c` includes with cycle
-detection), `pyproject.toml` (PEP 621 + Poetry, with caret/tilde shorthand
-expansion), and `Pipfile` / `Pipfile.lock`.
+| Flag | Effect |
+| --- | --- |
+| `--table` | Flat table view (default when `<path>` is a single project). |
+| `--summary` | One row per project: drift histogram + pin score. |
+| `--json` | JSON to stdout. See [JSON schema](#json-schema). |
+| `--include-prereleases` | Consider pre-release versions as candidates for "latest". |
+| `--exclude PATTERN` | Glob matched against directory **basename** (not full path). Repeatable. Layered on top of the built-in skip list. |
+| `--no-cache` | Skip the on-disk PyPI cache for this run. |
+| `--refresh-cache` | Force a fresh fetch and rewrite the cache. |
+| `--cache-ttl SECONDS` | Override the default TTL (3600). |
+| `--concurrency N` | PyPI fetch thread-pool size (default depends on dep count). |
+| `--fail-on-drift {build,patch,minor,major,epoch}` | Exit 1 when any dep has drift ≥ this level. Pure CI gate; does not change output. |
 
-## Usage
+Default view: tree (project → file → dep) for multi-project paths,
+table for a single project.
 
-```bash
-# Read-only audit, tree view, across a whole tree
-piptastic audit ~/projects
+### `list <path>`
 
-# Flat table view for a single project
-piptastic audit ./myproject --table
+Alias for `audit <path> --table` against a single project. Convenience
+only — no extra behaviour.
 
-# Machine-readable JSON (stable schema_version=1)
-piptastic audit . --json > report.json
+### `update <path> [packages ...]`
 
-# CI gate: fail the build if any dep is a minor or higher behind
-piptastic audit . --fail-on-drift minor
+Mutates `requirements.txt` in place. Resolves each pinned dep to the
+latest compatible release (respecting the existing specifier — a `~=`
+stays compatible-release, a `>=` floor stays a floor, etc.), writes a
+backup alongside the file, runs a test install in a throwaway venv, and
+rolls back if the install fails.
 
-# Mutate requirements.txt to the latest compatible pinned version
-piptastic update ./myproject
+| Flag | Effect |
+| --- | --- |
+| `--no-test` | Skip the test-install step. |
+| `--refresh` | Bypass the PyPI cache (equivalent to `--refresh-cache` on audit). |
+| `--temp-test-env` | Use a freshly created temporary venv for the test install (default reuses a cached one under `~/.cache/piptastic/`). |
 
-# Update only specific packages
-piptastic update ./myproject flask requests
+Pass package names as positional args to limit updates to those
+distributions. Only `requirements.txt`-family files are mutated in v0.2;
+`pyproject.toml` and `Pipfile` are not yet rewritten.
 
-# Update without running the test-install step
-piptastic update ./myproject --no-test
-```
+### `stats <path>`
 
-## Bootstrap and stats
+Cross-project rollup over the same audit pipeline. Terminal output
+includes: top N most-depended-upon packages, version fragmentation
+(packages pinned to multiple versions across the tree), yanked pins,
+unpinned projects, and tree-wide drift / pin-posture histograms.
 
-For a project that has a working `.venv/` but no `requirements.txt`,
-generate one from the venv's installed packages:
+| Flag | Effect |
+| --- | --- |
+| `--top N` | Top-N package list size (default 20). |
+| `--json` | JSON to stdout. See [JSON schema](#json-schema). |
+| `--exclude`, `--no-cache`, `--refresh-cache`, `--cache-ttl`, `--concurrency` | Same as `audit`. |
 
-```bash
-# Dry-run (print to stdout, write nothing)
-piptastic bootstrap ./myproject --dry-run
+### `bootstrap <path>`
 
-# Write to <myproject>/requirements.txt (refuses to overwrite)
-piptastic bootstrap ./myproject
+Generates a `requirements.txt` from the packages installed in a
+project's venv. Output is sorted `name==X.Y.Z` lines, with venv
+plumbing (`pip`, `setuptools`, `wheel`, `pkg_resources`, `distlib`,
+`_distutils_hack`) and any editable self-install of the project itself
+filtered out.
 
-# Overwrite with backup
-piptastic bootstrap ./myproject --force
-```
+| Flag | Effect |
+| --- | --- |
+| `--venv PATH` | Explicit venv directory (relative to `<path>` or absolute). Required if `<path>` contains multiple venvs and you want to disambiguate. |
+| `--force` | Overwrite an existing `requirements.txt`. The previous file is renamed to `requirements.txt.bak.<timestamp>` first. |
+| `--dry-run` | Print to stdout; write nothing. |
 
-The output is `name==X.Y.Z` pins for every distribution in the venv,
-excluding pip/setuptools/wheel/etc. plumbing and any editable install
-of the project itself.
+Auto-discovery probes `.venv`, `venv`, `env`, `.env` under `<path>` for
+a `pyvenv.cfg`. If none of those match, it scans the project's
+top-level directories for any `pyvenv.cfg`. If zero or multiple
+candidates are found and `--venv` was not given, the command fails
+without writing.
 
-For a tree-wide rollup of dependency health:
+## Project discovery
 
-```bash
-# Terminal report: top packages, version fragmentation, yanked pins,
-# unpinned projects, tree-wide drift/pin posture histograms
-piptastic stats ~/projects
+A directory is considered a Python project if it contains any of:
 
-# JSON for dashboards (stable schema_version=1, kind='stats')
-piptastic stats ~/projects --json > stats.json
+- `requirements*.txt` (including `requirements-dev.txt`, etc.)
+- `pyproject.toml` with a `[project]` or `[tool.poetry]` table
+- `Pipfile`
 
-# Limit top-N packages (default 20)
-piptastic stats ~/projects --top 5
-```
+Walks are bounded by an internal skip list: `.git`, `.venv`, `venv`,
+`env`, `.env`, `node_modules`, `__pycache__`, `site-packages`, `build`,
+`dist`, `.tox`, `.nox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`,
+plus any directory containing a `pyvenv.cfg` (so the contents of a venv
+are never treated as a project). `--exclude PATTERN` adds to this list
+and accepts glob syntax matched against the directory **basename**.
 
-`stats` reuses the same discovery + audit pipeline as `audit`, so it
-honors `--exclude`, the on-disk cache, and per-project Python version
-detection.
+Includes (`-r other.txt`, `-c constraints.txt`) inside requirements
+files are followed, with cycle detection. The audit attributes each dep
+to the file it was originally declared in, not the file that included
+it.
 
-## Output channels
+## Dependency parsing
 
-- **Tree view** (default for multi-project audits) — nested project → file → dep.
-- **Table view** (`--table`, default for single-project audits) — one row per dep.
-- **Summary view** (`--summary`) — one row per project, drift histogram + pin score.
-- **JSON** (`--json`) — stable shape, intended for CI consumption. Writes to
-  stdout; redirect with `> file.json`.
+| Source | What's read |
+| --- | --- |
+| `requirements*.txt` family | PEP 508 specifiers; `-r` / `-c` includes followed with cycle detection. Environment markers honoured. URL / VCS / local-path requirements are surfaced as `URL` posture (no version comparison performed). |
+| `pyproject.toml` (PEP 621) | `[project].dependencies` and every list under `[project.optional-dependencies]`. |
+| `pyproject.toml` (Poetry) | `[tool.poetry.dependencies]` and `[tool.poetry.group.<name>.dependencies]`. Caret (`^1.2.3`) and tilde (`~1.2.3`) shorthands are expanded to PEP 440 ranges. `python` is excluded. |
+| `Pipfile` | `[packages]` and `[dev-packages]`. |
+| `Pipfile.lock` | Hashed pin lines from `default` and `develop` sections. |
 
-The terminal renderer auto-detects whether stdout is a TTY and disables color
-when piping to a file.
+## Drift classification
 
-## Configuration
+For each dep with a comparable installed/declared version, drift is
+classified by which version component changed between the declared
+version and the latest matching PyPI release:
 
-- Caches PyPI metadata under `$XDG_CACHE_HOME/piptastic/pypi/` (1h TTL by
-  default). Override with `--cache-ttl`, `--no-cache`, `--refresh-cache`,
-  or the `PIPTASTIC_CACHE_DIR` environment variable.
-- Per-tree exclusions: `--exclude PATTERN` (repeatable; glob syntax). On top of
-  the built-in exclusion list (`.git`, `.venv`, `node_modules`, `__pycache__`,
-  `site-packages`, `build`, `dist`, any directory containing `pyvenv.cfg`,
-  etc.).
-- Logging: `--verbose` for INFO, `--quiet` for ERROR only, `--log-file PATH`
-  for a separate file log. Default is WARNING to stderr.
+| Tier | Meaning |
+| --- | --- |
+| `NONE` | Declared version equals the latest. |
+| `BUILD` | Only the 4th+ segment moved (sometimes called "nano"). |
+| `PATCH` | 3rd segment (the `Z` in `X.Y.Z`). |
+| `MINOR` | 2nd segment. |
+| `MAJOR` | 1st segment. |
+| `EPOCH` | PEP 440 epoch (`N!X.Y.Z`) changed. Rare. |
+
+`--fail-on-drift LEVEL` exits 1 when any dep has drift ≥ `LEVEL`.
+
+## Pin posture
+
+For each dep, the *specifier shape* (not the version value) determines
+posture:
+
+| Posture | Examples |
+| --- | --- |
+| `PINNED` | `flask==2.3.0`, `flask===2.3.0` |
+| `COMPATIBLE` | `flask~=2.3.0` (PEP 440 compatible-release) |
+| `RANGE` | `flask>=2.0,<3.0` |
+| `FLOOR` | `flask>=2.0` (open upper bound) |
+| `UNPINNED` | `flask` (no specifier at all) |
+| `URL` | `flask @ git+https://...`, local paths, direct URLs |
+
+**Pin score** is the percentage of a project's non-URL deps that are
+`PINNED` or `COMPATIBLE`. A project whose deps are all `URL` reports
+`n/a` instead of 0 — URL pinning depends on whether the URL pins a
+ref, which the auditor can't reliably tell.
+
+## JSON schema
+
+Both `audit --json` and `stats --json` emit `schema_version: 1`. The
+shape is intended to be stable across patch releases of piptastic;
+breaking changes will bump `schema_version`. Top-level discriminator
+is `kind`:
+
+- `kind: "audit"` — emitted by `audit --json`.
+- `kind: "stats"` — emitted by `stats --json`.
+
+Diff the schema against your dashboard / CI consumer before upgrading
+across a minor version bump.
+
+## Caching
+
+PyPI metadata is cached on disk. Default location:
+
+- POSIX: `$XDG_CACHE_HOME/piptastic/pypi/`, falling back to
+  `~/.cache/piptastic/pypi/`.
+- Windows: `%LOCALAPPDATA%\piptastic\pypi\`.
+
+Override with `PIPTASTIC_CACHE_DIR=<path>`. Default TTL is 3600s
+(1h). Cache entries are per-distribution JSON blobs; safe to delete
+the directory at any time.
+
+## Logging
+
+`-v` / `--verbose` flips the root logger to INFO. `-q` / `--quiet`
+silences everything below ERROR. `--log-file PATH` mirrors records
+into a file (the stderr stream is unaffected). Default is WARNING to
+stderr.
 
 ## Exit codes
 
-- `0` — audit completed successfully (even if outdated deps were found)
-- `1` — operational failure (path not found, no Python projects, PyPI
-  totally unreachable, malformed input)
-- `2` — `update` test-install failed and the requirements file was rolled
-  back from the backup
-
-Use `--fail-on-drift {build,patch,minor,major,epoch}` to make exit code 1
-also fire when drift at or above the given level is found — useful for CI
-gates on dependency staleness.
-
-## Status
-
-v0.2 — see `docs/superpowers/specs/` for the full design and
-`docs/superpowers/plans/` for the implementation plan.
+| Code | Meaning |
+| --- | --- |
+| `0` | Audit completed. Outdated deps in the output do **not** change the exit code by themselves — use `--fail-on-drift` for that. |
+| `1` | Operational failure: path doesn't exist, no Python projects found, malformed input, PyPI totally unreachable, or `--fail-on-drift` threshold tripped. |
+| `2` | `update` test-install failed; the requirements file was rolled back from its backup. |
 
 ## Not in v0.2
 
-Deferred to v0.3+: watch/daemon mode, CVE/security advisory checks via
-OSV.dev, lockfile-drift detection (Pipfile vs Pipfile.lock, poetry.lock,
-uv.lock), HTML report output, `setup.py` / `setup.cfg` parsing, `update`
-for `pyproject.toml` and `Pipfile`.
+These are deferred. None are committed to a v0.3 release date.
+
+- Watch/daemon mode.
+- CVE / security advisory lookups (OSV.dev integration).
+- Lockfile-drift detection (`Pipfile` ↔ `Pipfile.lock`, `poetry.lock`,
+  `uv.lock`).
+- HTML report output.
+- `setup.py` / `setup.cfg` parsing.
+- `update` for `pyproject.toml` and `Pipfile`.
+
+## License
+
+AGPL-3.0-or-later. Full text in [LICENSE](LICENSE).
+
+Practical summary (not a substitute for reading the licence):
+
+- Use, modify, and redistribute freely under the AGPL.
+- A modified version offered as a network service must offer its
+  corresponding source to the users of that service (the "SaaS
+  clause" — this is what distinguishes AGPL from plain GPL).
+- If those terms don't fit a commercial deployment, contact the
+  maintainer about a commercial licence.
+
+## Contributing
+
+Issues and PRs welcome. By submitting a contribution you agree it will
+be distributed under the project's licence (AGPL-3.0-or-later).

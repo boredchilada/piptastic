@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Terminal renderer using `rich`. Three views: tree, table, summary."""
 
 from __future__ import annotations

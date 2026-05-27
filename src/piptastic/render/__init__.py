@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Output renderers."""
 
 from piptastic.render.json_out import render_json, render_stats_json

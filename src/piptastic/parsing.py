@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Parse dep sources into a uniform list of Dep objects."""
 
 from __future__ import annotations

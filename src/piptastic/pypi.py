@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """PyPI metadata client with on-disk TTL cache and thread-pool concurrency."""
 
 from __future__ import annotations

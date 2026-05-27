@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared data models. All dataclasses are frozen for hashability."""
 
 from __future__ import annotations
