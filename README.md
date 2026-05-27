@@ -25,6 +25,76 @@ directly: `python -m piptastic` (or `py -3.10 -m piptastic` on Windows).
 Runtime requirements: Python 3.10+, `packaging`, `rich`. `tomli` is
 pulled in on Python < 3.11.
 
+## Quickstart
+
+Point it at a single project:
+
+```bash
+cd ~/code/my-flask-app
+piptastic audit .
+```
+
+You'll see a table with one row per declared dependency:
+
+```
++------------------------------------------------------------------------------+
+| Project       | File           | Group   | Package    | Current  | Latest |
+|---------------+----------------+---------+------------+----------+--------|
+| my-flask-app  | requirements.. | default | flask      | (2.3.0)  | 3.0.4  |
+| my-flask-app  | requirements.. | default | requests   | (2.31.0) | 2.32.5 |
+| my-flask-app  | requirements.. | default | sqlalchemy | (2.0.30) | 2.0.43 |
++------------------------------------------------------------------------------+
+   Drift | Pin    | Notes
+   ------+--------+-------
+   major | pinned |
+   minor | pinned |
+   patch | pinned |
+```
+
+How to read each column:
+
+- **Current** — the version your project declares (parens mean it was
+  parsed from a specifier like `flask==2.3.0`, not a lockfile).
+- **Latest** — newest non-prerelease on PyPI. Add `--include-prereleases`
+  to include alphas/betas/rcs.
+- **Drift** — how far behind: `none`, `build`, `patch`, `minor`,
+  `major`, or `epoch`. Colour-coded in your terminal.
+- **Pin** — the *shape* of the specifier: `pinned` (`==`),
+  `compatible` (`~=`), `range` (`>=,<`), `floor` (`>=`), `unpinned`
+  (no specifier), or `url`. See [Pin posture](#pin-posture).
+- **Notes** — yanked-release warnings and PyPI fetch errors.
+
+Point it at a whole tree of projects:
+
+```bash
+piptastic audit ~/code
+```
+
+Default view becomes a tree (project → file → dep). For a one-line-per-project
+overview instead:
+
+```bash
+piptastic audit ~/code --summary
+```
+
+```
++-------------------------------------------------------------------------+
+| Project        |   Py | Pin score | Major | Minor | Patch | Yanked | Deps
+|----------------+------+-----------+-------+-------+-------+--------+-----
+| my-flask-app   | 3.11 |      100% |     1 |     1 |     1 |      0 |   3
+| ingestion-svc  | 3.12 |       60% |     0 |     2 |     5 |      1 |  12
+| legacy-cron    | 3.10 |        0% |     8 |     3 |     1 |      2 |  14
++-------------------------------------------------------------------------+
+```
+
+**Pin score** is the percent of non-URL deps that are `pinned` or
+`compatible`. Higher = stricter pinning. Use the drift columns to spot
+which projects are dragging.
+
+That's the core loop: `audit` to look, `update` to act on a single
+project, `stats` to roll up across many, `bootstrap` to recover from a
+lost `requirements.txt`. The Workflows section below has full recipes.
+
 ## Commands
 
 ### `audit <path>`
@@ -103,6 +173,148 @@ a `pyvenv.cfg`. If none of those match, it scans the project's
 top-level directories for any `pyvenv.cfg`. If zero or multiple
 candidates are found and `--venv` was not given, the command fails
 without writing.
+
+## Workflows
+
+### "Is anything in this project stale?"
+
+```bash
+piptastic audit .
+```
+
+Read the **Drift** column. `none` everywhere = you're current. Anything
+`minor` or `major` is worth investigating — it usually means you've
+pinned to an older release and missed feature work or breaking
+changes upstream.
+
+If you just want a yes/no:
+
+```bash
+piptastic audit . --summary
+```
+
+The `Major` / `Minor` / `Patch` counters tell you the shape of the
+debt at a glance.
+
+### "Bump my project's pins to the latest compatible versions"
+
+```bash
+piptastic update .
+```
+
+For each pinned dep in `requirements.txt`, this resolves the latest
+release compatible with the existing specifier, rewrites the file,
+keeps a `.bak` next to it, then runs a test install in a throwaway
+venv. If the test install fails, the file is rolled back.
+
+Common variations:
+
+```bash
+# Only update specific packages
+piptastic update . flask requests
+
+# Skip the test install (faster, but no safety net)
+piptastic update . --no-test
+
+# Force a fresh PyPI fetch (don't trust the local cache)
+piptastic update . --refresh
+```
+
+`update` only touches `requirements*.txt`-family files in v0.2.
+`pyproject.toml` and `Pipfile` are not rewritten yet.
+
+### "Block stale-dep PRs in CI"
+
+```bash
+piptastic audit . --fail-on-drift minor
+```
+
+Exits 1 if any dep has drift at or above `minor`. Drop it into a CI
+step; the build fails when someone's pinned to something that's
+fallen too far behind. Tighter gate: `--fail-on-drift patch`. Looser:
+`--fail-on-drift major`.
+
+The output is the normal table — your CI logs show exactly which
+packages tripped the gate.
+
+Example GitHub Actions step:
+
+```yaml
+- name: Check dependency staleness
+  run: |
+    pip install piptastic
+    piptastic audit . --fail-on-drift minor
+```
+
+### "I have a venv but no requirements.txt"
+
+You inherited a project, or you blew away `requirements.txt` at some
+point and kept developing inside the venv. Reconstruct from what's
+actually installed:
+
+```bash
+# See what would be written
+piptastic bootstrap . --dry-run
+
+# Write it
+piptastic bootstrap .
+```
+
+Output is sorted `name==X.Y.Z` lines. Plumbing (`pip`, `setuptools`,
+`wheel`, etc.) and editable installs of the project itself are
+filtered out. If the project has multiple venvs (`.venv`, `venv`,
+`env`...), pass `--venv .venv` to disambiguate.
+
+To overwrite an existing `requirements.txt` (a backup is made first):
+
+```bash
+piptastic bootstrap . --force
+```
+
+### "What's the dep health across my whole code folder?"
+
+```bash
+piptastic stats ~/code
+```
+
+Cross-project rollup. Shows the most-depended-upon packages, version
+fragmentation (the same package pinned to different versions across
+your projects — a refactor smell), yanked pins that still ship, and
+tree-wide drift / pin-posture histograms.
+
+Useful for finding the "we should standardise on one version of X"
+problem before it bites you in production.
+
+For dashboards or further processing:
+
+```bash
+piptastic stats ~/code --json > stats.json
+```
+
+The schema is stable (`schema_version=1`) — safe to parse from
+scripts.
+
+### "Audit a project before installing it"
+
+You're evaluating a dependency or contractor's codebase. Don't trust
+their README; look at their actual pinning hygiene:
+
+```bash
+piptastic audit /path/to/their/repo --summary
+```
+
+A project with 0% pin score and 30 major-drift deps tells you what
+you need to know about their maintenance posture.
+
+### "Plug the output into something else"
+
+All views support `--json`. The schema is documented under
+[JSON schema](#json-schema). Both `audit --json` and `stats --json`
+write to stdout, so redirect with `> file.json` or pipe directly:
+
+```bash
+piptastic audit ~/code --json | jq '.projects[] | select(.pin_score < 50)'
+```
 
 ## Project discovery
 
