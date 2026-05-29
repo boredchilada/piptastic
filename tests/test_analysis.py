@@ -76,12 +76,15 @@ class FakeClient:
 def _md(name: str, versions: dict[str, dict]) -> PackageMetadata:
     releases = []
     for v, info in versions.items():
+        upload = info.get("upload")
+        if isinstance(upload, str):
+            upload = datetime.fromisoformat(upload)
         releases.append(ReleaseInfo(
             version=Version(v),
             yanked=info.get("yanked", False),
             yanked_reason=info.get("yanked_reason"),
             requires_python=SpecifierSet(info["rp"]) if "rp" in info else None,
-            upload_time=None,
+            upload_time=upload,
         ))
     return PackageMetadata(name=name, releases=tuple(releases), fetched_at=datetime.now(timezone.utc))
 
@@ -167,6 +170,39 @@ def test_audit_project_skips_incompatible_python(monkeypatch):
     monkeypatch.setattr(analysis, "_collect_deps", lambda project: deps)
     report = audit_project(project, FakeClient(md), current_python=Version("3.11"))
     assert str(report.deps[0].latest) == "3.0.2"
+
+
+def test_audit_project_attaches_latest_release_date(monkeypatch):
+    """latest_release_date must be the upload_time of the *selected latest*
+    version, not an older release — verifies the _upload_time_for linkage that
+    feeds the Age column and --fail-on-age."""
+    project = _project_with_deps([])
+    deps = [_dep("flask", "==3.0.2")]
+    md = {
+        "flask": _md("flask", {
+            "3.0.2": {"rp": ">=3.8", "upload": "2023-01-01T00:00:00+00:00"},
+            "3.1.0": {"rp": ">=3.8", "upload": "2024-10-10T00:00:00+00:00"},
+        }),
+    }
+    from piptastic import analysis
+    monkeypatch.setattr(analysis, "_collect_deps", lambda project: deps)
+    report = audit_project(project, FakeClient(md), current_python=Version("3.11"))
+    da = report.deps[0]
+    assert str(da.latest) == "3.1.0"
+    # The date is 3.1.0's, NOT the older 3.0.2 pin's.
+    assert da.latest_release_date == datetime(2024, 10, 10, tzinfo=timezone.utc)
+
+
+def test_audit_project_latest_release_date_none_when_unknown(monkeypatch):
+    """No upload_time on the latest version -> latest_release_date is None
+    (so the age gate fails open rather than tripping on missing data)."""
+    project = _project_with_deps([])
+    deps = [_dep("flask", "==3.0.2")]
+    md = {"flask": _md("flask", {"3.0.2": {"rp": ">=3.8"}, "3.1.0": {"rp": ">=3.8"}})}
+    from piptastic import analysis
+    monkeypatch.setattr(analysis, "_collect_deps", lambda project: deps)
+    report = audit_project(project, FakeClient(md), current_python=Version("3.11"))
+    assert report.deps[0].latest_release_date is None
 
 
 def test_audit_project_pinning_score(monkeypatch):

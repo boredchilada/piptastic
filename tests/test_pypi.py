@@ -51,7 +51,10 @@ def test_parse_pypi_payload_normalizes_releases():
     assert by_version["3.0.0"].yanked is True
     assert by_version["3.0.0"].yanked_reason == "broken"
     assert by_version["3.1.0"].requires_python == SpecifierSet(">=3.9")
-    assert by_version["3.1.0"].upload_time is not None
+    # upload_time is parsed to a tz-aware UTC datetime (the trailing `Z` is
+    # normalized to +00:00). This feeds the release-age signal / --fail-on-age.
+    assert by_version["3.1.0"].upload_time == datetime(2024, 10, 10, tzinfo=timezone.utc)
+    assert by_version["3.1.0"].upload_time.tzinfo is not None
 
 
 def test_cache_round_trip(tmp_path: Path):
@@ -63,6 +66,10 @@ def test_cache_round_trip(tmp_path: Path):
     assert {str(r.version) for r in loaded.releases} == {
         "3.0.0", "3.0.2", "3.1.0", "3.1.0rc1"
     }
+    # upload_time must survive the dehydrate/rehydrate round-trip with its
+    # value and timezone intact, or a cached audit would lose the age signal.
+    loaded_by_ver = {str(r.version): r for r in loaded.releases}
+    assert loaded_by_ver["3.1.0"].upload_time == datetime(2024, 10, 10, tzinfo=timezone.utc)
 
 
 def test_cache_expiry(tmp_path: Path):
