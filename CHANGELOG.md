@@ -12,6 +12,16 @@ No changes pending.
 
 ## [0.4.1] — 2026-05-29
 
+**In plain English:** you can now fail a CI build when a dependency hasn't
+shipped a release in too long (not just when it's outdated). Scanning a folder
+of projects ends with a one-line tally so you see the big picture at a glance.
+The summary table stopped hiding the less-common kinds of version drift. And
+if you've told piptastic to accept a known security issue until a certain
+date, it now warns you a month before that acceptance runs out — so the alert
+doesn't silently come back and break your build. Plus smaller polish: clearer
+messages when a filter matches nothing, a progress bar on `stats`, and help
+text for options that were missing it.
+
 ### Added
 
 - `--fail-on-age DAYS` CI gate on `audit`. Exits `3` when any dep's latest

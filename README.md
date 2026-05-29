@@ -71,13 +71,15 @@ piptastic audit ~/code --summary
 ```
 
 ```
-+---------------------------------------------------------------------------------+
-| Project        |   Py | Pin score | Major | Minor | Patch | Yanked | Vulns | Deps
-|----------------+------+-----------+-------+-------+-------+--------+-------+-----
-| my-flask-app   | 3.11 |      100% |     1 |     1 |     1 |      0 |     3 |   3
-| ingestion-svc  | 3.12 |       60% |     0 |     2 |     5 |      1 |     0 |  12
-| legacy-cron    | 3.10 |        0% |     8 |     3 |     1 |      2 |    27 |  14
-+---------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------------+
+| Project        |   Py | Pin score | Major | Minor | Patch | Other | Yanked | Vulns | Deps
+|----------------+------+-----------+-------+-------+-------+-------+--------+-------+-----
+| my-flask-app   | 3.11 |      100% |     1 |     1 |     1 |     0 |      0 |     3 |   3
+| ingestion-svc  | 3.12 |       60% |     0 |     2 |     5 |     0 |      1 |     0 |  12
+| legacy-cron    | 3.10 |        0% |     8 |     3 |     1 |     1 |      2 |    27 |  14
++-----------------------------------------------------------------------------------------+
+
+3 projects | 29 deps | 27 CVEs across 1 project(s) | 3 yanked
 ```
 
 Apply CVE-aware bumps to one project's `requirements.txt`:
@@ -130,7 +132,7 @@ dependency's pin posture, drift against PyPI, and known CVEs.
 | Flag | Effect |
 | --- | --- |
 | `--table` | Flat table view (default for a single project). |
-| `--summary` | One row per project: drift histogram + pin score + CVE rollup. |
+| `--summary` | One row per project: drift histogram (Major / Minor / Patch, plus an `Other` column folding in build + epoch drift) + pin score + CVE rollup. |
 | `--json` | Machine-readable JSON to stdout. See [JSON schema](#json-schema). |
 | `--sarif` | SARIF 2.1.0 output for GitHub Code Scanning. Mutually exclusive with `--json`. |
 | `--include-prereleases` | Consider pre-release versions as candidates for "latest". |
@@ -148,7 +150,9 @@ dependency's pin posture, drift against PyPI, and known CVEs.
 | `--strict-vuln-gate` | When `--fail-on-vuln` is set, also trip on `vuln_unreachable` packages. Default is fail-open with a warning. |
 
 Default view: tree (project → file → dep) for multi-project paths, table for
-a single project.
+a single project. When more than one project is shown, terminal output ends
+with a one-line tally — project and dependency counts, plus CVE and yanked
+totals when non-zero.
 
 ### `update <path> [packages ...]`
 
@@ -342,7 +346,10 @@ expires = "2026-12-31"          # required; past-expiry rules are ignored
 ```
 
 All four fields are required. Past-expiry rules are ignored and logged so
-they don't sit forever. Each rule matches against the canonical advisory id
+they don't sit forever. A rule expiring within the next 30 days logs a
+heads-up warning while it's still active, so an accepted CVE doesn't silently
+re-activate (and trip `--fail-on-vuln`) the day it lapses. Each rule matches
+against the canonical advisory id
 or any alias pip-audit reports (GHSA / CVE / PYSEC). `package = "*"`
 suppresses the CVE across every package in the project.
 
