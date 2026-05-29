@@ -28,6 +28,7 @@ project or a tree of hundreds.
 - [Release notes](#release-notes)
 - [License](#license)
 - [Contributing](#contributing)
+- [Acknowledgements](#acknowledgements)
 
 ## Install
 
@@ -572,3 +573,27 @@ Engineering conventions (frozen dataclasses, I/O boundaries, JSON-schema
 versioning rules, cross-platform constraints) are documented in
 [CLAUDE.md](CLAUDE.md). Read it before opening a non-trivial PR; the same
 conventions apply whether the contributor is human or an AI agent.
+
+## Acknowledgements
+
+piptastic builds on a handful of well-maintained libraries:
+
+- [packaging](https://github.com/pypa/packaging) (PyPA) — PEP 440 version,
+  specifier, and marker parsing. The drift and pin-posture model is built on
+  its `Version` and `SpecifierSet`.
+- [rich](https://github.com/Textualize/rich) — the terminal tables, trees,
+  and progress bars.
+- [pip-audit](https://github.com/pypa/pip-audit) (PyPA) — the CVE scan.
+  piptastic invokes it as a subprocess rather than reimplementing advisory
+  matching.
+- [tomli](https://github.com/hukkin/tomli) — TOML parsing on Python 3.10
+  (3.11+ uses the standard-library `tomllib`).
+- [hatchling](https://github.com/pypa/hatch) — the build backend.
+- [pytest](https://github.com/pytest-dev/pytest) — the test suite.
+
+Vulnerability advisories surfaced in the audit come from pip-audit's data
+sources — primarily the
+[PyPI Advisory Database](https://github.com/pypa/advisory-database) and
+[OSV](https://osv.dev/) — and package metadata comes from the
+[PyPI JSON API](https://warehouse.pypa.io/api-reference/json.html). Thanks to
+the maintainers of all of the above.
