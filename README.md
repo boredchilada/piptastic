@@ -8,7 +8,7 @@ latest compatible version while honoring CVE fix-version data from
 
 [![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
-[![Tests: 146 passing](https://img.shields.io/badge/tests-146%20passing-brightgreen.svg)](tests/)
+[![tests](https://github.com/boredchilada/piptastic/actions/workflows/test.yml/badge.svg)](https://github.com/boredchilada/piptastic/actions/workflows/test.yml)
 [![JSON schema: v3](https://img.shields.io/badge/json--schema-v3-informational.svg)](#json-schema)
 
 Single-shot CLI. No daemon, no server, no shared state. Runs against one
