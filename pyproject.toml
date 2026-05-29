@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "piptastic"
-version = "0.4.1"
+version = "0.4.2"
 description = "Audit Python dependency posture and known CVEs across all projects in a tree."
 readme = "README.md"
 requires-python = ">=3.10"

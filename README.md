@@ -394,7 +394,9 @@ Per-dep results:
 
 Per-project rollup:
 
-- `vuln_count` — count of non-suppressed advisories across all deps.
+- `vuln_count` — count of non-suppressed advisories across all deps,
+  deduplicated by advisory id (pip-audit may report the same advisory once per
+  affected version range; those are collapsed so the count isn't inflated).
 - `vuln_unreachable` — packages where pip-audit failed to return a status.
   Surfaced as "unknown," never silently treated as clean.
 - `suppressed_count` — accepted-risk advisories from
@@ -427,6 +429,11 @@ originally declared in, not the file that included it.
 | `pyproject.toml` (Poetry) | `[tool.poetry.dependencies]` and `[tool.poetry.group.<name>.dependencies]`. Caret (`^1.2.3`) and tilde (`~1.2.3`) shorthands expanded to PEP 440 ranges. `python` is excluded. |
 | `Pipfile` | `[packages]` and `[dev-packages]`. |
 | `Pipfile.lock` | Hashed pin lines from `default` and `develop` sections. |
+
+`requirements*.txt` files are decoded as UTF-8 (a UTF-8 BOM is tolerated). A
+UTF-16 or UTF-32 byte-order mark is detected and decoded accordingly, so a
+file written by PowerShell's `pip freeze > requirements.txt` (UTF-16-LE on
+Windows) parses correctly rather than being silently dropped.
 
 ### Drift classification
 

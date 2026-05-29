@@ -8,6 +8,16 @@ JSON shape.
 
 ## [Unreleased]
 
+No changes pending.
+
+## [0.4.2] — 2026-05-29
+
+**In plain English:** two accuracy fixes found by running the auditor over a
+large real-world tree. Requirements files saved as UTF-16 (what PowerShell's
+`pip freeze` writes on Windows) were being read as garbage, so those projects
+looked empty — they now parse. And the CVE count no longer double-counts the
+same advisory when the vulnerability database lists it more than once.
+
 ### Fixed
 
 - **UTF-16 requirements files are now parsed correctly.** A
@@ -198,7 +208,8 @@ errors.
 - Cross-platform line endings pinned via `.gitattributes`.
 - AGPL-3.0-or-later license.
 
-[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/boredchilada/piptastic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/boredchilada/piptastic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/boredchilada/piptastic/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/boredchilada/piptastic/compare/v0.2.1...v0.3.0
