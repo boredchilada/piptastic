@@ -101,6 +101,12 @@ class Vulnerability:
     aliases: tuple[str, ...]
     fix_versions: tuple[Version, ...]
     description: str
+    # Set True when a project-local suppression rule (see suppressions.py)
+    # has accepted the risk. Suppressed advisories DO NOT count toward
+    # vuln_count and DO NOT drive --fail-on-vuln or the update CVE floor.
+    suppressed: bool = False
+    suppression_reason: str | None = None
+    suppression_expires: str | None = None  # ISO date
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,10 @@ class DepAudit:
     warnings: tuple[str, ...]
     vulnerabilities: tuple[Vulnerability, ...] = ()
     min_safe_version: Version | None = None
+    # Upload timestamp (UTC) of `latest`, if PyPI returned one. Surfaces an
+    # alive-vs-abandoned signal independent of drift: a package can be at
+    # `drift=none` and still 4 years stale.
+    latest_release_date: datetime | None = None
 
 
 @dataclass
@@ -125,8 +135,9 @@ class ProjectAudit:
     drift_summary: dict[SemverDrift, int] = field(default_factory=dict)
     yanked_count: int = 0
     pypi_unreachable: list[str] = field(default_factory=list)
-    vuln_count: int = 0
+    vuln_count: int = 0  # non-suppressed advisories
     vuln_unreachable: list[str] = field(default_factory=list)
+    suppressed_count: int = 0  # CVEs accepted via [tool.piptastic.suppressions]
 
 
 # ---------- stats ----------

@@ -23,6 +23,7 @@ from piptastic.models import (
     Vulnerability,
 )
 from piptastic.parsing import parse_source
+from piptastic.suppressions import find_rule, load_suppressions
 from piptastic.vulns import compute_min_safe_version
 
 logger = get_logger(__name__)
@@ -133,6 +134,9 @@ def audit_project(
         installed_by_name[dep.name] = installed
         current_for_drift_by_id[id(dep)] = _current_version_for_drift(dep, installed)
 
+    # Project-local suppression rules (accepted-risk CVE allowlist).
+    suppression_rules = load_suppressions(project.path)
+
     # Build the (name, version) set for the vuln lookup. Prefer the version
     # used for drift (i.e. the == pin if any, else the locally-installed
     # version). Skip URL deps and deps with no resolvable version.
@@ -175,13 +179,38 @@ def audit_project(
         vulns: tuple[Vulnerability, ...] = ()
         min_safe: Version | None = None
         if current_for_drift is not None and dep.url is None:
-            vulns = vuln_results.get((dep.name, str(current_for_drift)), ())
-            if vulns:
-                min_safe = compute_min_safe_version(current_for_drift, vulns)
-                ids = ", ".join(v.id for v in vulns[:3])
-                if len(vulns) > 3:
-                    ids += f", +{len(vulns) - 3} more"
-                warnings.append(f"{len(vulns)} vulnerability(ies): {ids}")
+            raw_vulns = vuln_results.get((dep.name, str(current_for_drift)), ())
+            # Apply project-local suppressions: tag matching vulns as
+            # suppressed (carry through to JSON/SARIF) but exclude them
+            # from min_safe_version + the active warning count + gate.
+            tagged: list[Vulnerability] = []
+            for v in raw_vulns:
+                rule = find_rule(suppression_rules, package=dep.name, vuln=v)
+                if rule is None:
+                    tagged.append(v)
+                    continue
+                tagged.append(Vulnerability(
+                    id=v.id,
+                    aliases=v.aliases,
+                    fix_versions=v.fix_versions,
+                    description=v.description,
+                    suppressed=True,
+                    suppression_reason=rule.reason,
+                    suppression_expires=rule.expires.isoformat(),
+                ))
+            vulns = tuple(tagged)
+            active = tuple(v for v in vulns if not v.suppressed)
+            if active:
+                min_safe = compute_min_safe_version(current_for_drift, active)
+                ids = ", ".join(v.id for v in active[:3])
+                if len(active) > 3:
+                    ids += f", +{len(active) - 3} more"
+                warnings.append(f"{len(active)} vulnerability(ies): {ids}")
+            suppressed_n = len(vulns) - len(active)
+            if suppressed_n:
+                warnings.append(f"{suppressed_n} CVE(s) suppressed (accepted-risk)")
+
+        latest_date = _upload_time_for(metadata.get(dep.name), effective_latest)
 
         audits.append(DepAudit(
             dep=dep,
@@ -194,12 +223,22 @@ def audit_project(
             warnings=tuple(warnings),
             vulnerabilities=vulns,
             min_safe_version=min_safe,
+            latest_release_date=latest_date,
         ))
 
     score = _pinning_score(audits)
     drift_summary = dict(Counter(a.drift for a in audits))
     yanked_count = sum(1 for a in audits if a.yanked)
-    vuln_count = sum(len(a.vulnerabilities) for a in audits)
+    # vuln_count tracks NON-SUPPRESSED advisories. suppressed_count is
+    # surfaced separately so operators can see the volume of accepted risk.
+    vuln_count = sum(
+        sum(1 for v in a.vulnerabilities if not v.suppressed)
+        for a in audits
+    )
+    suppressed_count = sum(
+        sum(1 for v in a.vulnerabilities if v.suppressed)
+        for a in audits
+    )
 
     return ProjectAudit(
         project=project,
@@ -210,6 +249,7 @@ def audit_project(
         pypi_unreachable=unreachable,
         vuln_count=vuln_count,
         vuln_unreachable=vuln_unreachable,
+        suppressed_count=suppressed_count,
     )
 
 
@@ -279,6 +319,16 @@ def _pick_latest(
     latest = max(stable) if stable else None
     latest_pre = max(with_pre) if with_pre else None
     return latest, latest_pre
+
+
+def _upload_time_for(md: PackageMetadata | None, version: Version | None):
+    """Return the upload_time for `version` in `md`, or None."""
+    if md is None or version is None:
+        return None
+    for r in md.releases:
+        if r.version == version:
+            return r.upload_time
+    return None
 
 
 def _is_pinned_version_yanked(dep: Dep, md: PackageMetadata | None) -> bool:

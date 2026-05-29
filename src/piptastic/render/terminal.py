@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from typing import Iterable, Literal
 
 from rich.console import Console
@@ -11,6 +12,35 @@ from rich.table import Table
 from rich.tree import Tree
 
 from piptastic.models import DepAudit, PinStatus, ProjectAudit, SemverDrift
+
+
+def _format_age(latest_date: datetime | None) -> tuple[str, str]:
+    """Return (text, rich-style) for a latest-release timestamp.
+
+    Buckets: <=90d dim, 91-365d yellow, 1-3y orange3, >3y red.
+    Returns ('-', '') when unknown.
+    """
+    if latest_date is None:
+        return "-", ""
+    now = datetime.now(timezone.utc)
+    if latest_date.tzinfo is None:
+        latest_date = latest_date.replace(tzinfo=timezone.utc)
+    days = max(0, int((now - latest_date).total_seconds() // 86400))
+    if days < 30:
+        text = f"{days}d"
+    elif days < 365:
+        text = f"{days // 30}mo"
+    else:
+        text = f"{days // 365}y"
+    if days <= 90:
+        style = "dim"
+    elif days <= 365:
+        style = "yellow"
+    elif days <= 365 * 3:
+        style = "orange3"
+    else:
+        style = "red"
+    return text, style
 
 ViewMode = Literal["tree", "table", "summary"]
 
@@ -101,6 +131,7 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
     table.add_column("Package")
     table.add_column("Current")
     table.add_column("Latest")
+    table.add_column("Age", justify="right")
     table.add_column("Min safe")
     table.add_column("Drift")
     table.add_column("Pin")
@@ -115,9 +146,19 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
                 notes = "yanked" + (f"; {notes}" if notes else "")
             current = _current_str(d)
             latest = str(d.latest) if d.latest else "-"
+            age_text, age_style = _format_age(d.latest_release_date)
+            age_cell = f"[{age_style}]{age_text}[/{age_style}]" if age_style else age_text
             min_safe = str(d.min_safe_version) if d.min_safe_version else "-"
-            vuln_n = len(d.vulnerabilities)
-            vuln_cell = f"[bold red]{vuln_n}[/bold red]" if vuln_n else "-"
+            active_n = sum(1 for v in d.vulnerabilities if not v.suppressed)
+            suppressed_n = len(d.vulnerabilities) - active_n
+            if active_n:
+                vuln_cell = f"[bold red]{active_n}[/bold red]"
+            elif suppressed_n:
+                vuln_cell = "-"
+            else:
+                vuln_cell = "-"
+            if suppressed_n:
+                vuln_cell = f"{vuln_cell} [dim](+{suppressed_n} S)[/dim]"
             table.add_row(
                 a.project.name,
                 d.dep.source.path.name,
@@ -125,6 +166,7 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
                 d.dep.name,
                 current,
                 latest,
+                age_cell,
                 min_safe,
                 drift_text,
                 d.pin_status.value,
@@ -168,6 +210,12 @@ def _dep_line(d: DepAudit) -> str:
     if d.vulnerabilities:
         safe = f" min-safe {d.min_safe_version}" if d.min_safe_version else ""
         vuln_mark = f"  [bold red]vulns: {len(d.vulnerabilities)}[/bold red]{safe}"
+    age_mark = ""
+    if d.latest_release_date is not None:
+        text, style_age = _format_age(d.latest_release_date)
+        # Surface age only when it's interesting (1+ year stale).
+        if style_age in ("orange3", "red"):
+            age_mark = f"  [{style_age}](age: {text})[/{style_age}]"
     return (
         f"{d.dep.name:<25} "
         f"{current:<14} -> {latest:<10}  "
@@ -175,6 +223,7 @@ def _dep_line(d: DepAudit) -> str:
         f"{d.pin_status.value}"
         f"{yanked_mark}"
         f"{vuln_mark}"
+        f"{age_mark}"
     )
 
 

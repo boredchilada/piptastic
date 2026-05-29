@@ -48,7 +48,7 @@ def test_audit_json_smoke(tmp_path, monkeypatch, capsys):
     assert exit_code == 0
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["projects"][0]["name"] == "req_only"
 
 
@@ -62,10 +62,152 @@ def test_list_alias_runs(tmp_path, monkeypatch, capsys):
     class FakeClient:
         def fetch_many(self, names): return {}
         def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
     monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
 
     exit_code = main(["list", str(FIXTURES / "req_only")])
     assert exit_code == 0
+
+
+def test_exit_code_constants_are_distinct():
+    from piptastic.cli import EXIT_OK, EXIT_ERROR, EXIT_ROLLBACK, EXIT_GATE
+    assert len({EXIT_OK, EXIT_ERROR, EXIT_ROLLBACK, EXIT_GATE}) == 4
+    assert (EXIT_OK, EXIT_ERROR, EXIT_ROLLBACK, EXIT_GATE) == (0, 1, 2, 3)
+
+
+def test_fail_on_drift_returns_gate_not_error(monkeypatch):
+    """v0.4 contract: tripped --fail-on-drift returns EXIT_GATE (3), not EXIT_ERROR (1)."""
+    from piptastic import cli as cli_mod
+    from piptastic.cli import EXIT_GATE
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+    # Force the gate to trip by stubbing the threshold check.
+    monkeypatch.setattr(cli_mod, "_exceeds_threshold", lambda audits, threshold: True)
+
+    exit_code = main(["audit", str(FIXTURES / "req_only"), "--fail-on-drift", "patch"])
+    assert exit_code == EXIT_GATE
+
+
+def test_vuln_gate_trips_with_any(monkeypatch):
+    """P1: --fail-on-vuln any returns EXIT_GATE when there's at least one CVE."""
+    from piptastic import cli as cli_mod
+    from piptastic.cli import EXIT_GATE
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+    # Stub the gate evaluator to "tripped".
+    monkeypatch.setattr(cli_mod, "_vuln_gate_tripped", lambda *a, **k: True)
+
+    exit_code = main(["audit", str(FIXTURES / "req_only"), "--fail-on-vuln", "any"])
+    assert exit_code == EXIT_GATE
+
+
+def test_vuln_gate_and_no_vulns_are_incompatible(monkeypatch, capsys):
+    """P1+P6: --no-vulns + --fail-on-vuln must error out cleanly."""
+    from piptastic.cli import EXIT_ERROR
+    exit_code = main([
+        "audit", str(FIXTURES / "req_only"),
+        "--no-vulns", "--fail-on-vuln", "any",
+    ])
+    assert exit_code == EXIT_ERROR
+
+
+def test_filter_helper_vulnerable_only_and_drift_min():
+    """P5: _filter_audits drops non-matching deps and empty projects."""
+    from datetime import datetime, timezone
+    from packaging.specifiers import SpecifierSet
+    from piptastic.cli import _filter_audits
+    from piptastic.models import (
+        Dep, DepAudit, DepSource, PinStatus, Project, ProjectAudit,
+        SemverDrift, SourceKind, Vulnerability,
+    )
+
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=Path("r.txt"), group="default")
+    proj = Project(name="p", path=Path("/p"), python_version=None,
+                   python_source=None, python_constraints=None, dep_sources=(src,))
+    def _dep(name):
+        return Dep(name=name, raw_name=name, specifier=SpecifierSet(),
+                   extras=frozenset(), marker=None, source=src, line_no=1, url=None)
+
+    vuln_dep = DepAudit(
+        dep=_dep("flask"),
+        installed=None, latest=None, latest_including_prereleases=None,
+        drift=SemverDrift.PATCH, pin_status=PinStatus.PINNED, yanked=False,
+        warnings=(), vulnerabilities=(Vulnerability(id="X", aliases=(), fix_versions=(), description=""),),
+    )
+    clean_minor = DepAudit(
+        dep=_dep("requests"),
+        installed=None, latest=None, latest_including_prereleases=None,
+        drift=SemverDrift.MINOR, pin_status=PinStatus.PINNED, yanked=False,
+        warnings=(),
+    )
+    clean_none = DepAudit(
+        dep=_dep("sqlalchemy"),
+        installed=None, latest=None, latest_including_prereleases=None,
+        drift=SemverDrift.NONE, pin_status=PinStatus.PINNED, yanked=False,
+        warnings=(),
+    )
+    pa = ProjectAudit(project=proj, deps=[vuln_dep, clean_minor, clean_none], pinning_score=1.0)
+
+    # vulnerable-only keeps only flask
+    out = _filter_audits([pa], vulnerable_only=True, drift_min=None)
+    assert len(out) == 1 and {d.dep.name for d in out[0].deps} == {"flask"}
+
+    # drift-min minor keeps flask and requests
+    out = _filter_audits([pa], vulnerable_only=False, drift_min="minor")
+    assert {d.dep.name for d in out[0].deps} == {"requests"}  # flask drift is patch
+
+    # combined: must satisfy both
+    out = _filter_audits([pa], vulnerable_only=True, drift_min="minor")
+    assert out == []  # no dep is both vulnerable AND minor+ drift
+
+
+def test_no_vulns_skips_vuln_client_build(monkeypatch, capsys):
+    """P6: --no-vulns must not even construct the vuln client (no pip-audit call)."""
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    calls = {"vuln_built": 0}
+    def boom(args):
+        calls["vuln_built"] += 1
+        raise AssertionError("vuln client should not be built with --no-vulns")
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", boom)
+
+    exit_code = main(["audit", str(FIXTURES / "req_only"), "--no-vulns"])
+    assert exit_code == 0
+    assert calls["vuln_built"] == 0
+
+
+def test_no_apply_cve_floor_flag_parses():
+    """P10: --apply-cve-floor positive flag is gone; --no-apply-cve-floor remains."""
+    parser = build_parser()
+    args = parser.parse_args(["update", ".", "--no-apply-cve-floor"])
+    assert args.apply_cve_floor is False
+    # Default is True
+    args = parser.parse_args(["update", "."])
+    assert args.apply_cve_floor is True
+    # Old positive flag now errors
+    with pytest.raises(SystemExit):
+        parser.parse_args(["update", ".", "--apply-cve-floor"])
 
 
 from tests.test_bootstrap import build_fake_venv
@@ -184,6 +326,6 @@ def test_stats_json_smoke(monkeypatch, capsys):
     captured = capsys.readouterr()
     import json as _json
     payload = _json.loads(captured.out)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["kind"] == "stats"
     assert payload["totals"]["project_count"] >= 1

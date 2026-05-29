@@ -10,7 +10,7 @@ from typing import Iterable
 
 from piptastic.models import DepAudit, ProjectAudit, SemverDrift
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def render_json(audits: Iterable[ProjectAudit], *, root: Path) -> str:
@@ -40,6 +40,7 @@ def _project_to_dict(pa: ProjectAudit) -> dict:
         "pypi_unreachable": pa.pypi_unreachable,
         "vuln_count": pa.vuln_count,
         "vuln_unreachable": pa.vuln_unreachable,
+        "suppressed_count": pa.suppressed_count,
         "sources": [
             {"kind": s.kind.value, "path": str(s.path), "group": s.group}
             for s in p.dep_sources
@@ -82,11 +83,30 @@ def _dep_to_dict(da: DepAudit) -> dict:
                 "aliases": list(v.aliases),
                 "fix_versions": [str(f) for f in v.fix_versions],
                 "description": v.description,
+                "suppressed": v.suppressed,
+                "suppression": (
+                    {"reason": v.suppression_reason, "expires": v.suppression_expires}
+                    if v.suppressed else None
+                ),
             }
             for v in da.vulnerabilities
         ],
         "min_safe_version": str(da.min_safe_version) if da.min_safe_version else None,
+        "latest_release_date": (
+            da.latest_release_date.isoformat() if da.latest_release_date else None
+        ),
+        "latest_release_age_days": _age_days(da.latest_release_date),
     }
+
+
+def _age_days(latest_date):
+    if latest_date is None:
+        return None
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if latest_date.tzinfo is None:
+        latest_date = latest_date.replace(tzinfo=timezone.utc)
+    return max(0, int((now - latest_date).total_seconds() // 86400))
 
 
 # ---------- stats ----------
