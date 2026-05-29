@@ -280,8 +280,35 @@ def _parse_pip_audit_payload(
                 fix_versions=tuple(sorted(fixes)),
                 description=v.get("description", "") or "",
             ))
-        out[(name, ver)] = tuple(vulns)
+        out[(name, ver)] = _dedupe_vulns(vulns)
     return out
+
+
+def _dedupe_vulns(vulns: Iterable[Vulnerability]) -> tuple[Vulnerability, ...]:
+    """Collapse advisories that share an `id` into one entry, unioning their
+    fix_versions and aliases (the first non-empty description wins).
+
+    pip-audit / OSV can emit the same advisory id multiple times for a single
+    package — typically one record per affected version range. Left as-is those
+    duplicates inflate vuln_count, the tree-wide CVE total, SARIF results, and
+    the `update` CVE notes. Order is preserved (first occurrence wins its slot).
+    """
+    by_id: dict[str, Vulnerability] = {}
+    for v in vulns:
+        prev = by_id.get(v.id)
+        if prev is None:
+            by_id[v.id] = v
+            continue
+        by_id[v.id] = Vulnerability(
+            id=v.id,
+            aliases=tuple(dict.fromkeys(prev.aliases + v.aliases)),
+            fix_versions=tuple(sorted(set(prev.fix_versions) | set(v.fix_versions))),
+            description=prev.description or v.description,
+            suppressed=prev.suppressed or v.suppressed,
+            suppression_reason=prev.suppression_reason or v.suppression_reason,
+            suppression_expires=prev.suppression_expires or v.suppression_expires,
+        )
+    return tuple(by_id.values())
 
 
 def _dehydrate_vuln(v: Vulnerability) -> dict[str, Any]:
@@ -308,7 +335,9 @@ def _rehydrate_vulns(raw: list[dict[str, Any]]) -> tuple[Vulnerability, ...]:
             fix_versions=tuple(fixes),
             description=r.get("description", "") or "",
         ))
-    return tuple(out)
+    # Dedupe on read as well, so caches written before this fix self-correct
+    # without requiring --refresh.
+    return _dedupe_vulns(out)
 
 
 def compute_min_safe_version(

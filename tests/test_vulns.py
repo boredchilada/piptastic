@@ -57,6 +57,52 @@ def test_parse_pip_audit_payload_extracts_vulns():
     assert Version("2.3.2") in v.fix_versions
 
 
+def test_parse_pip_audit_payload_dedupes_by_id_merging_fixes():
+    """pip-audit/OSV can list the same advisory id multiple times (one record
+    per affected range). They must collapse to one Vulnerability with
+    fix_versions and aliases unioned, so vuln_count isn't inflated and
+    min_safe stays correct."""
+    payload = {
+        "dependencies": [{
+            "name": "aiohttp", "version": "3.9.1",
+            "vulns": [
+                {"id": "PYSEC-2024-24", "aliases": ["CVE-2024-1"],
+                 "fix_versions": ["3.9.2"], "description": "first"},
+                {"id": "PYSEC-2024-24", "aliases": ["GHSA-xxxx"],
+                 "fix_versions": ["3.9.4"], "description": ""},
+                {"id": "PYSEC-2024-99", "aliases": [],
+                 "fix_versions": ["3.10.0"], "description": "other"},
+            ],
+        }]
+    }
+    vulns = _parse_pip_audit_payload(payload)[("aiohttp", "3.9.1")]
+    assert [v.id for v in vulns] == ["PYSEC-2024-24", "PYSEC-2024-99"]  # deduped, ordered
+    dup = next(v for v in vulns if v.id == "PYSEC-2024-24")
+    assert Version("3.9.2") in dup.fix_versions and Version("3.9.4") in dup.fix_versions
+    assert "CVE-2024-1" in dup.aliases and "GHSA-xxxx" in dup.aliases  # aliases unioned
+    assert dup.description == "first"  # first non-empty description kept
+
+
+def test_read_cache_dedupes_stale_duplicate_ids(tmp_path: Path):
+    """Caches written before the dedup fix may hold duplicate ids; they must be
+    deduped on read so old caches don't keep inflating counts (no --refresh)."""
+    import json
+    client = VulnClient(cache_dir=tmp_path, ttl_seconds=3600)
+    key = ("aiohttp", "3.9.1")
+    path = client._cache_path(key)
+    path.write_text(json.dumps({
+        "name": key[0], "version": key[1], "fetched_at": "2026-01-01T00:00:00+00:00",
+        "vulnerabilities": [
+            {"id": "PYSEC-2024-24", "aliases": [], "fix_versions": ["3.9.2"], "description": ""},
+            {"id": "PYSEC-2024-24", "aliases": [], "fix_versions": ["3.9.4"], "description": ""},
+        ],
+    }), encoding="utf-8")
+    loaded = client._read_cache(key)
+    assert [v.id for v in loaded] == ["PYSEC-2024-24"]
+    assert Version("3.9.2") in loaded[0].fix_versions
+    assert Version("3.9.4") in loaded[0].fix_versions
+
+
 def test_compute_min_safe_version_picks_lowest_higher_fix():
     v = Vulnerability(
         id="X",

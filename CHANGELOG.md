@@ -8,7 +8,16 @@ JSON shape.
 
 ## [Unreleased]
 
-No changes pending.
+### Fixed
+
+- **Duplicate advisories no longer inflate `vuln_count`.** pip-audit / OSV can
+  report the same advisory id more than once for a package (one record per
+  affected version range). Those are now collapsed to a single advisory, with
+  fix_versions and aliases unioned, so `vuln_count`, the tree-wide CVE total,
+  the `--summary` footer, SARIF results, and the `update` CVE notes stop
+  double-counting. Deduping also runs on cache reads, so caches written before
+  this fix self-correct without `--refresh`. `min_safe_version` is unaffected
+  (the union preserves every known fix version).
 
 ## [0.4.1] — 2026-05-29
 
