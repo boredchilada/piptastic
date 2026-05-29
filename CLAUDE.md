@@ -7,6 +7,11 @@ same conventions apply whether the contributor is a human or an AI agent.
 The file is named `CLAUDE.md` because Claude Code and several other coding
 agents look for it by name. The content is plain contributor documentation.
 
+For a deeper technical walkthrough — architecture, the audit data flow, module
+internals, data-model invariants, testing gotchas, and extension recipes — see
+[CLAUDE.technical.md](CLAUDE.technical.md). This file is the *what/why* (rules);
+that one is the *how* (the map).
+
 ## What this project is
 
 `piptastic` is a Python dependency auditor. It walks a directory tree, finds
