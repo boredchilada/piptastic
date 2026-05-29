@@ -212,6 +212,12 @@ def test_exceeds_age_threshold():
     assert _exceeds_age_threshold([unknown], 0) is False  # missing date never trips
     assert _exceeds_age_threshold([fresh, old], 365) is True
 
+    # Boundary: age exactly == threshold must NOT trip (gate uses strict `>`),
+    # so a `--fail-on-age 200` passes a package that is exactly 200 days old.
+    boundary = _audit("edge", now - timedelta(days=200, hours=6))  # age_days == 200
+    assert _exceeds_age_threshold([boundary], 200) is False
+    assert _exceeds_age_threshold([boundary], 199) is True
+
 
 def test_fail_on_age_returns_gate(monkeypatch):
     """--fail-on-age trips EXIT_GATE (3), not EXIT_ERROR."""
@@ -230,6 +236,79 @@ def test_fail_on_age_returns_gate(monkeypatch):
 
     exit_code = main(["audit", str(FIXTURES / "req_only"), "--fail-on-age", "365"])
     assert exit_code == EXIT_GATE
+
+
+def test_fail_on_age_fails_open_without_release_dates(monkeypatch):
+    """Real (unstubbed) age gate: with no PyPI data every dep has an unknown
+    release date, so even --fail-on-age 1 cannot trip -> exit 0 (fail-open)."""
+    from piptastic import cli as cli_mod
+    from piptastic.cli import EXIT_OK
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+
+    exit_code = main(["audit", str(FIXTURES / "req_only"), "--fail-on-age", "1"])
+    assert exit_code == EXIT_OK
+
+
+class _TtyProxy:
+    """Wrap a stream so isatty() is True while writes still reach the wrapped
+    (captured) stream. Used to force the show_progress branch deterministically;
+    a plain monkeypatch of stdout.isatty() does not take under capsys."""
+
+    def __init__(self, wrapped):
+        self._w = wrapped
+
+    def isatty(self):
+        return True
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
+
+
+def _force_tty_stdout(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, "stdout", _TtyProxy(sys.stdout))
+
+
+def test_stats_progress_branch_runs(monkeypatch, capsys):
+    """Force the multi-project + TTY progress branch added to `stats` in
+    v0.4.1 and confirm it completes cleanly and still prints the report."""
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    _force_tty_stdout(monkeypatch)  # FIXTURES has >1 project -> show_progress True
+
+    exit_code = main(["stats", str(FIXTURES)])
+    assert exit_code == 0
+    assert "piptastic stats" in capsys.readouterr().out
+
+
+def test_audit_progress_branch_runs(monkeypatch, capsys):
+    """Force the multi-project + TTY progress branch in `audit` (tree mode)."""
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+    _force_tty_stdout(monkeypatch)
+
+    exit_code = main(["audit", str(FIXTURES)])
+    assert exit_code == 0
 
 
 def test_table_and_summary_warns(monkeypatch, capsys):
