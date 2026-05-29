@@ -49,6 +49,19 @@ text for options that were missing it.
 
 ## [0.4.0] — 2026-05-28
 
+**In plain English:** this is the big security release. piptastic can now fail
+a CI build when any dependency has a known, unpatched security issue
+(`--fail-on-vuln`), and it tells you the lowest safe version to bump to. If an
+advisory doesn't actually affect you, you can formally accept it (with a
+reason and an expiry date) so it stops nagging. `update` gained a `--dry-run`
+so you can preview changes before anything is written. You can now filter the
+report down to just the vulnerable or just the stale dependencies, emit
+results as SARIF so they show up in GitHub's Security tab, and see a progress
+bar on big scans. piptastic also now flags packages that haven't shipped in
+years, even if they're technically "up to date." One thing to watch if you
+script against it: the CI failure exit code for policy gates changed from `1`
+to `3` (so `1` now only ever means "something actually went wrong").
+
 ### Breaking
 
 - **Exit-code contract split.** `--fail-on-drift` and the new
