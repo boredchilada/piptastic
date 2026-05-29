@@ -57,6 +57,33 @@ def test_parse_requirements_txt_extras_and_marker():
     assert 'python_version' in str(marked.marker)
 
 
+def test_parse_requirements_utf16_le_bom(tmp_path):
+    """A UTF-16-LE requirements.txt (exactly what PowerShell
+    `pip freeze > requirements.txt` writes) must parse correctly, not get
+    mangled into 'F\\x00l\\x00a\\x00...' garbage by the latin-1 fallback."""
+    p = tmp_path / "requirements.txt"
+    p.write_bytes("Flask==3.1.0\nrequests==2.32.3\n".encode("utf-16"))  # utf-16 adds an LE BOM
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=p, group="default")
+    names = [d.name for d in parse_source(src)]
+    assert "flask" in names and "requests" in names
+
+
+def test_parse_requirements_utf16_be_bom(tmp_path):
+    import codecs
+    p = tmp_path / "requirements.txt"
+    p.write_bytes(codecs.BOM_UTF16_BE + "Flask==3.1.0\n".encode("utf-16-be"))
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=p, group="default")
+    assert "flask" in [d.name for d in parse_source(src)]
+
+
+def test_parse_requirements_utf8_bom_still_works(tmp_path):
+    import codecs
+    p = tmp_path / "requirements.txt"
+    p.write_bytes(codecs.BOM_UTF8 + b"Flask==3.1.0\n")
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=p, group="default")
+    assert "flask" in [d.name for d in parse_source(src)]
+
+
 def test_parse_requirements_txt_url_dep():
     src = DepSource(
         kind=SourceKind.REQUIREMENTS_TXT,

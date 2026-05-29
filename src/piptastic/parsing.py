@@ -54,6 +54,26 @@ def parse_source(source: DepSource) -> list[Dep]:
     raise NotImplementedError(f"parsing for {source.kind} not yet implemented")
 
 
+def _decode_requirements(data: bytes, path: Path) -> str:
+    """Decode requirements-file bytes, honoring a byte-order mark.
+
+    UTF-16 must be detected explicitly: Windows tooling routinely writes it
+    (PowerShell `pip freeze > requirements.txt` emits UTF-16-LE-with-BOM). The
+    latin-1 last-resort fallback never raises, so without BOM detection a
+    UTF-16 file decodes to 'F\\x00l\\x00a\\x00...' and every requirement is
+    silently dropped. `utf-8-sig` transparently strips a UTF-8 BOM.
+    """
+    if data[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"):
+        return data.decode("utf-32")
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        logger.warning("not valid UTF-8/UTF-16, falling back to latin-1: %s", path)
+        return data.decode("latin-1")
+
+
 def _parse_requirements_file(
     source: DepSource, *, _visited: set[Path]
 ) -> list[Dep]:
@@ -62,22 +82,12 @@ def _parse_requirements_file(
         return []
     _visited.add(path)
 
-    # `utf-8-sig` strips a BOM if present; many requirements.txt files in
-    # the wild have one from Windows editors. Fall back to latin-1 (which
-    # never raises) if the file isn't valid UTF-8 at all — better to parse
-    # what we can than crash the whole scan over one bad file.
     try:
-        text = path.read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError:
-        logger.warning("not valid UTF-8, falling back to latin-1: %s", path)
-        try:
-            text = path.read_text(encoding="latin-1")
-        except OSError as e:
-            logger.warning("could not read %s: %s", path, e)
-            return []
+        data = path.read_bytes()
     except OSError as e:
         logger.warning("could not read %s: %s", path, e)
         return []
+    text = _decode_requirements(data, path)
 
     deps: list[Dep] = []
     for line_no, raw in enumerate(text.splitlines(), start=1):

@@ -10,6 +10,13 @@ JSON shape.
 
 ### Fixed
 
+- **UTF-16 requirements files are now parsed correctly.** A
+  `requirements.txt` written as UTF-16 (what PowerShell
+  `pip freeze > requirements.txt` produces on Windows) was decoded via the
+  latin-1 last-resort fallback, turning every line into `F\x00l\x00a\x00…`
+  garbage so all dependencies were silently dropped and the project looked
+  empty. Decoding now detects a UTF-16/UTF-32 BOM before falling back, and
+  `utf-8-sig` still handles a UTF-8 BOM.
 - **Duplicate advisories no longer inflate `vuln_count`.** pip-audit / OSV can
   report the same advisory id more than once for a package (one record per
   affected version range). Those are now collapsed to a single advisory, with
