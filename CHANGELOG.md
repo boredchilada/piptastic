@@ -8,6 +8,17 @@ JSON shape.
 
 ## [Unreleased]
 
+No changes pending.
+
+## [0.5.0] — 2026-05-29
+
+**In plain English:** piptastic now reads two dependency forms it used to skip.
+A bare `git+https://…` line in a requirements file (no `#egg=` name) is now
+recognized and named from the repo URL instead of being dropped. And Poetry's
+platform-split dependencies — where one package lists several versions for
+different operating systems — are now read as separate entries instead of being
+ignored.
+
 ### Added
 
 - **Bare VCS URLs are now surfaced.** A `requirements.txt` line like
@@ -220,7 +231,8 @@ errors.
 - Cross-platform line endings pinned via `.gitattributes`.
 - AGPL-3.0-or-later license.
 
-[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/boredchilada/piptastic/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/boredchilada/piptastic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/boredchilada/piptastic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/boredchilada/piptastic/compare/v0.3.0...v0.4.0
