@@ -69,6 +69,60 @@ def test_expired_rule_ignored(tmp_path: Path, caplog):
     assert rules == []
 
 
+def _capture_piptastic_warnings(caplog):
+    """Attach caplog's handler directly to the piptastic logger.
+
+    The piptastic logger sets propagate=False once configure_logging has run,
+    so caplog (which listens on root) would otherwise miss its records.
+    """
+    import logging
+
+    plogger = logging.getLogger("piptastic")
+    plogger.addHandler(caplog.handler)
+    plogger.setLevel(logging.WARNING)
+    return plogger
+
+
+def test_near_expiry_rule_kept_but_warns(tmp_path: Path, caplog):
+    """A rule expiring within 30 days is still honored, but logs a heads-up."""
+    soon = (date.today() + timedelta(days=10)).isoformat()
+    (tmp_path / "pyproject.toml").write_text(
+        f'[tool.piptastic]\n'
+        f'[[tool.piptastic.suppressions]]\n'
+        f'package = "flask"\n'
+        f'cve = "CVE-SOON"\n'
+        f'reason = "accepted for now"\n'
+        f'expires = "{soon}"\n',
+        encoding="utf-8",
+    )
+    plogger = _capture_piptastic_warnings(caplog)
+    try:
+        rules = load_suppressions(tmp_path)
+    finally:
+        plogger.removeHandler(caplog.handler)
+    assert len(rules) == 1  # still active
+    assert any("expires in" in r.getMessage() for r in caplog.records)
+
+
+def test_far_future_rule_does_not_warn(tmp_path: Path, caplog):
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.piptastic]\n'
+        '[[tool.piptastic.suppressions]]\n'
+        'package = "flask"\n'
+        'cve = "CVE-FAR"\n'
+        'reason = "long-lived"\n'
+        'expires = "2099-01-01"\n',
+        encoding="utf-8",
+    )
+    plogger = _capture_piptastic_warnings(caplog)
+    try:
+        rules = load_suppressions(tmp_path)
+    finally:
+        plogger.removeHandler(caplog.handler)
+    assert len(rules) == 1
+    assert not any("expires in" in r.getMessage() for r in caplog.records)
+
+
 def test_missing_required_fields_ignored(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text(
         '[tool.piptastic]\n'

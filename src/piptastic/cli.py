@@ -9,7 +9,7 @@ import importlib.metadata
 import logging
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from packaging.version import Version
@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # audit
     audit = sub.add_parser("audit", help="Audit dependency health (read-only)")
-    audit.add_argument("path", type=Path)
+    audit.add_argument("path", type=Path, help="A single project directory or a tree to scan")
     audit.add_argument("--table", action="store_true", help="Flat table view")
     audit.add_argument("--summary", action="store_true", help="One row per project")
     audit.add_argument("--json", action="store_true", help="Machine-readable JSON to stdout")
@@ -78,6 +78,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["build", "patch", "minor", "major", "epoch"],
         default=None,
         help="Exit 3 (gate) if any dep has drift at or above this level",
+    )
+    audit.add_argument(
+        "--fail-on-age",
+        type=int,
+        metavar="DAYS",
+        default=None,
+        help="Exit 3 (gate) if any dep's latest release is older than DAYS (uses latest_release_age_days)",
     )
     audit.add_argument(
         "--no-vulns",
@@ -121,11 +128,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     # update
     upd = sub.add_parser("update", help="Update requirements*.txt to latest pinned versions")
-    upd.add_argument("path", type=Path)
-    upd.add_argument("packages", nargs="*")
-    upd.add_argument("--no-test", action="store_true")
-    upd.add_argument("--refresh", action="store_true")
-    upd.add_argument("--temp-test-env", action="store_true")
+    upd.add_argument("path", type=Path, help="Project directory whose requirements*.txt to rewrite")
+    upd.add_argument(
+        "packages", nargs="*",
+        help="Limit updates to these distributions (default: all pinned deps)",
+    )
+    upd.add_argument(
+        "--no-test", action="store_true",
+        help="Skip the throwaway test install that verifies the bumped pins resolve",
+    )
+    upd.add_argument(
+        "--refresh", action="store_true",
+        help="Bypass the PyPI and vuln caches for a fresh fetch",
+    )
+    upd.add_argument(
+        "--temp-test-env", action="store_true",
+        help="Place the test-install venv under the OS temp dir instead of next to the project",
+    )
     upd.add_argument(
         "--no-apply-cve-floor",
         dest="apply_cve_floor",
@@ -144,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
         "stats",
         help="Cross-project rollup (top packages, fragmentation, yanked, etc.)",
     )
-    stats.add_argument("path", type=Path)
+    stats.add_argument("path", type=Path, help="A single project directory or a tree to roll up")
     stats.add_argument("--top", type=int, default=20, help="Top N packages (default: 20)")
     stats.add_argument("--json", action="store_true", help="Machine-readable JSON to stdout")
     stats.add_argument(
@@ -161,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
         "bootstrap",
         help="Generate requirements.txt from a project's installed venv",
     )
-    boot.add_argument("path", type=Path)
+    boot.add_argument("path", type=Path, help="Project directory containing the venv to freeze")
     boot.add_argument(
         "--venv",
         type=Path, default=None,
@@ -273,6 +292,8 @@ def _cmd_audit(args) -> int:
     if args.json and getattr(args, "sarif", False):
         logger.error("--json and --sarif are mutually exclusive")
         return EXIT_ERROR
+    if getattr(args, "table", False) and getattr(args, "summary", False):
+        logger.warning("--table and --summary both set; showing --summary")
     if fail_on_vuln is not None:
         # Validate value early so we don't run the whole audit on a typo.
         if fail_on_vuln != "any":
@@ -344,6 +365,17 @@ def _cmd_audit(args) -> int:
         print(render_json(filtered, root=path))
     elif getattr(args, "sarif", False):
         print(render_sarif(filtered, root=path))
+    elif not filtered and audits:
+        # A display filter (--vulnerable-only / --drift-min) dropped every
+        # project. "No Python projects found" would be misleading here — N
+        # were scanned and simply none matched. Report what actually held.
+        active = []
+        if getattr(args, "vulnerable_only", False):
+            active.append("--vulnerable-only")
+        if getattr(args, "drift_min", None):
+            active.append(f"--drift-min {args.drift_min}")
+        crit = " and ".join(active) if active else "the active filter"
+        print(f"No deps matched {crit} across {len(audits)} project(s) scanned.")
     else:
         mode = "summary" if args.summary else ("table" if (args.table or single is not None) else "tree")
         render_terminal(filtered, mode=mode)
@@ -358,9 +390,34 @@ def _cmd_audit(args) -> int:
     if fail_on_vuln is not None:
         if _vuln_gate_tripped(audits, fail_on_vuln, strict=getattr(args, "strict_vuln_gate", False)):
             gate_tripped = True
+    fail_on_age = getattr(args, "fail_on_age", None)
+    if fail_on_age is not None:
+        if _exceeds_age_threshold(audits, fail_on_age):
+            logger.warning("--fail-on-age %d threshold tripped", fail_on_age)
+            gate_tripped = True
     if gate_tripped:
         return EXIT_GATE
     return EXIT_OK
+
+
+def _exceeds_age_threshold(audits: list[ProjectAudit], max_age_days: int) -> bool:
+    """True when any dep's latest release is older than `max_age_days`.
+
+    Deps with no known release date (PyPI miss) are skipped — an unknown age
+    can't trip the gate, matching the project's fail-open-on-missing-data rule.
+    """
+    now = datetime.now(timezone.utc)
+    for a in audits:
+        for d in a.deps:
+            rel = d.latest_release_date
+            if rel is None:
+                continue
+            if rel.tzinfo is None:
+                rel = rel.replace(tzinfo=timezone.utc)
+            age_days = (now - rel).total_seconds() // 86400
+            if age_days > max_age_days:
+                return True
+    return False
 
 
 def _vuln_gate_tripped(
@@ -626,12 +683,32 @@ def _cmd_stats(args) -> int:
     client = _build_client(args)
     current_py = Version(".".join(str(x) for x in sys.version_info[:3]))
     audits = []
-    for p in projects:
-        try:
-            # stats does not need vuln data — keep it fast.
-            audits.append(audit_project(p, client, current_python=current_py))
-        except Exception as e:
-            logger.warning("failed to audit %s: %s", p.name, e)
+
+    # Same progress affordance as `audit`: a tree of hundreds shouldn't sit
+    # silent. stderr-only + transient so --json stdout stays clean.
+    show_progress = (
+        len(projects) > 1
+        and sys.stdout.isatty()
+        and not args.json
+        and not args.quiet
+    )
+    progress_ctx = _make_progress() if show_progress else None
+    task_id = None
+    if progress_ctx is not None:
+        progress_ctx.__enter__()
+        task_id = progress_ctx.add_task(f"scanning {len(projects)} project(s)", total=len(projects))
+    try:
+        for p in projects:
+            try:
+                # stats does not need vuln data — keep it fast.
+                audits.append(audit_project(p, client, current_python=current_py))
+            except Exception as e:
+                logger.warning("failed to audit %s: %s", p.name, e)
+            if progress_ctx is not None:
+                progress_ctx.advance(task_id)
+    finally:
+        if progress_ctx is not None:
+            progress_ctx.__exit__(None, None, None)
 
     report = compute_stats(audits, top=args.top, root=path)
 

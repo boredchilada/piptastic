@@ -10,6 +10,33 @@ JSON shape.
 
 No changes pending.
 
+## [0.4.1] — 2026-05-29
+
+### Added
+
+- `--fail-on-age DAYS` CI gate on `audit`. Exits `3` when any dep's latest
+  release is older than `DAYS`, reusing the `latest_release_age_days` signal.
+  Deps with an unknown release date never trip it (fail-open on missing data).
+- Aggregate footer after a multi-project terminal render: project / dep
+  counts plus CVE and yanked totals when non-zero. Single-project output is
+  unchanged.
+- `Other` column on the `--summary` view, summing `build` + `epoch` drift so
+  a project whose only drift is in those tiers no longer reads as `0/0/0`.
+
+### Changed
+
+- Empty display-filter results (`--vulnerable-only` / `--drift-min` matching
+  nothing) now report "No deps matched … across N project(s) scanned" instead
+  of the misleading "No Python projects found."
+- Suppression rules expiring within 30 days now log a heads-up warning so an
+  accepted CVE doesn't silently re-activate. Past-expiry handling is unchanged.
+- `audit --table --summary` now warns that `--summary` wins instead of
+  silently picking one.
+- `--help` text filled in for the `update` / `stats` / `bootstrap` positional
+  arguments and the `update --no-test` / `--refresh` / `--temp-test-env` flags.
+- `stats` shows the same progress bar as `audit` on multi-project scans
+  (stderr-only, hidden for `--json` / non-TTY / `--quiet`).
+
 ## [0.4.0] — 2026-05-28
 
 ### Breaking
@@ -133,7 +160,8 @@ No changes pending.
 - Cross-platform line endings pinned via `.gitattributes`.
 - AGPL-3.0-or-later license.
 
-[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/boredchilada/piptastic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/boredchilada/piptastic/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/boredchilada/piptastic/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/boredchilada/piptastic/compare/v0.2.0...v0.2.1

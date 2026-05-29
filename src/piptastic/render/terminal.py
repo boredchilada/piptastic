@@ -89,6 +89,25 @@ def render_terminal(
     else:
         _render_tree(audits, console)
 
+    if len(audits) > 1:
+        _render_footer(audits, console)
+
+
+def _render_footer(audits: list[ProjectAudit], console: Console) -> None:
+    """One-glance totals after a multi-project render. Optional segments
+    (CVEs, yanked) only appear when non-zero so a clean tree stays quiet."""
+    total_deps = sum(len(a.deps) for a in audits)
+    total_vulns = sum(a.vuln_count for a in audits)
+    projects_with_vulns = sum(1 for a in audits if a.vuln_count)
+    total_yanked = sum(a.yanked_count for a in audits)
+
+    parts = [f"{len(audits)} projects", f"{total_deps} deps"]
+    if total_vulns:
+        parts.append(f"[bold red]{total_vulns} CVEs across {projects_with_vulns} project(s)[/bold red]")
+    if total_yanked:
+        parts.append(f"[red]{total_yanked} yanked[/red]")
+    console.print("\n[dim]" + " | ".join(parts) + "[/dim]")
+
 
 def _format_pin_score(score: float | None) -> str:
     if score is None:
@@ -104,6 +123,10 @@ def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
     table.add_column("Major", justify="right", style="red")
     table.add_column("Minor", justify="right", style="orange3")
     table.add_column("Patch", justify="right", style="yellow")
+    # build + epoch drift — small, but a project with only these would
+    # otherwise read as 0/0/0 and look clean. (unknown is not drift; it's
+    # surfaced via pypi_unreachable, so it's deliberately excluded here.)
+    table.add_column("Other", justify="right", style="dim")
     table.add_column("Yanked", justify="right", style="red")
     table.add_column("Vulns", justify="right", style="bold red")
     table.add_column("Deps", justify="right")
@@ -116,6 +139,8 @@ def _render_summary(audits: list[ProjectAudit], console: Console) -> None:
             str(a.drift_summary.get(SemverDrift.MAJOR, 0)),
             str(a.drift_summary.get(SemverDrift.MINOR, 0)),
             str(a.drift_summary.get(SemverDrift.PATCH, 0)),
+            str(a.drift_summary.get(SemverDrift.BUILD, 0)
+                + a.drift_summary.get(SemverDrift.EPOCH, 0)),
             str(a.yanked_count),
             str(a.vuln_count),
             str(len(a.deps)),

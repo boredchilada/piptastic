@@ -178,6 +178,103 @@ def test_filter_helper_vulnerable_only_and_drift_min():
     assert out == []  # no dep is both vulnerable AND minor+ drift
 
 
+def test_exceeds_age_threshold():
+    """_exceeds_age_threshold trips on old releases, ignores unknown dates."""
+    from datetime import datetime, timedelta, timezone
+    from packaging.specifiers import SpecifierSet
+    from piptastic.cli import _exceeds_age_threshold
+    from piptastic.models import (
+        Dep, DepAudit, DepSource, PinStatus, Project, ProjectAudit,
+        SemverDrift, SourceKind,
+    )
+
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=Path("r.txt"), group="default")
+    proj = Project(name="p", path=Path("/p"), python_version=None,
+                   python_source=None, python_constraints=None, dep_sources=(src,))
+
+    def _audit(name, release_date):
+        dep = Dep(name=name, raw_name=name, specifier=SpecifierSet(),
+                  extras=frozenset(), marker=None, source=src, line_no=1, url=None)
+        da = DepAudit(
+            dep=dep, installed=None, latest=None, latest_including_prereleases=None,
+            drift=SemverDrift.NONE, pin_status=PinStatus.PINNED, yanked=False,
+            warnings=(), latest_release_date=release_date,
+        )
+        return ProjectAudit(project=proj, deps=[da], pinning_score=1.0)
+
+    now = datetime.now(timezone.utc)
+    old = _audit("ancient", now - timedelta(days=400))
+    fresh = _audit("fresh", now - timedelta(days=5))
+    unknown = _audit("mystery", None)
+
+    assert _exceeds_age_threshold([old], 365) is True
+    assert _exceeds_age_threshold([fresh], 365) is False
+    assert _exceeds_age_threshold([unknown], 0) is False  # missing date never trips
+    assert _exceeds_age_threshold([fresh, old], 365) is True
+
+
+def test_fail_on_age_returns_gate(monkeypatch):
+    """--fail-on-age trips EXIT_GATE (3), not EXIT_ERROR."""
+    from piptastic import cli as cli_mod
+    from piptastic.cli import EXIT_GATE
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+    monkeypatch.setattr(cli_mod, "_exceeds_age_threshold", lambda audits, days: True)
+
+    exit_code = main(["audit", str(FIXTURES / "req_only"), "--fail-on-age", "365"])
+    assert exit_code == EXIT_GATE
+
+
+def test_table_and_summary_warns(monkeypatch, capsys):
+    """--table + --summary logs a notice that summary wins (no silent eat).
+
+    The piptastic logger sets propagate=False, so the warning is asserted on
+    stderr (where main() routes it) rather than via caplog.
+    """
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+
+    main(["audit", str(FIXTURES / "req_only"), "--table", "--summary"])
+    assert "--table and --summary" in capsys.readouterr().err
+
+
+def test_vulnerable_only_empty_reports_scan_not_no_projects(monkeypatch, capsys):
+    """When --vulnerable-only filters every project away, the terminal output
+    must say deps were scanned-but-unmatched, not 'No Python projects found'."""
+    from piptastic import cli as cli_mod
+
+    class FakeClient:
+        def fetch_many(self, names): return {}
+        def fetch_one(self, name): return None
+    class FakeVulnClient:
+        unreachable: list = []
+        def fetch_for(self, pkgs): return {}
+    monkeypatch.setattr(cli_mod, "_build_client", lambda args: FakeClient())
+    monkeypatch.setattr(cli_mod, "_build_vuln_client", lambda args: FakeVulnClient())
+
+    exit_code = main(["audit", str(FIXTURES / "req_only"), "--vulnerable-only"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "No Python projects found" not in out
+    assert "--vulnerable-only" in out
+    assert "scanned" in out
+
+
 def test_no_vulns_skips_vuln_client_build(monkeypatch, capsys):
     """P6: --no-vulns must not even construct the vuln client (no pip-audit call)."""
     from piptastic import cli as cli_mod

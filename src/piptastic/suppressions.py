@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -30,6 +30,10 @@ logger = get_logger(__name__)
 
 # Wildcard token for tree-wide suppressions.
 WILDCARD = "*"
+
+# A suppression expiring within this window gets a heads-up warning so an
+# accepted CVE doesn't silently re-activate (and break CI) without notice.
+NEAR_EXPIRY_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,13 @@ def _parse_rules(raw_rules: list, *, source: str) -> list[SuppressionRule]:
                 package, cve, source, expires.isoformat(),
             )
             continue
+        days_left = (expires - today).days
+        if days_left <= NEAR_EXPIRY_DAYS:
+            logger.warning(
+                "suppressions: rule %s/%s in %s expires in %d day(s) (%s); "
+                "the CVE will re-activate after that; refresh or remove",
+                package, cve, source, days_left, expires.isoformat(),
+            )
         rules.append(SuppressionRule(
             package=package if package == WILDCARD else canonicalize_name(package),
             cve=cve,

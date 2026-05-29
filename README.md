@@ -143,6 +143,7 @@ dependency's pin posture, drift against PyPI, and known CVEs.
 | `--vulnerable-only` | Show only deps with non-suppressed CVEs. Projects with zero matches are dropped. |
 | `--drift-min {build,patch,minor,major,epoch}` | Show only deps with drift ≥ this level. |
 | `--fail-on-drift {build,patch,minor,major,epoch}` | Exit `3` when any dep has drift ≥ this level. |
+| `--fail-on-age DAYS` | Exit `3` when any dep's latest release is older than `DAYS`. Deps with an unknown release date (PyPI miss) never trip it. |
 | `--fail-on-vuln any\|N` | Exit `3` when any dep has a non-suppressed CVE (`any`) or when tree-wide CVE count ≥ N. |
 | `--strict-vuln-gate` | When `--fail-on-vuln` is set, also trip on `vuln_unreachable` packages. Default is fail-open with a warning. |
 
@@ -524,7 +525,7 @@ the stderr stream stays as-is. Default is WARNING to stderr.
 | `0` | Audit completed; no gate tripped. Outdated or vulnerable deps do not change the exit code by themselves. |
 | `1` | Operational failure: path doesn't exist, no Python projects found, malformed input, internal crash. PyPI / pip-audit unreachable does NOT bump this — both degrade gracefully. |
 | `2` | `update` test-install failed; the requirements file was rolled back from its backup. |
-| `3` | Policy gate tripped: `--fail-on-drift` and/or `--fail-on-vuln`. The audit itself was successful. |
+| `3` | Policy gate tripped: `--fail-on-drift`, `--fail-on-vuln`, and/or `--fail-on-age`. The audit itself was successful. |
 
 CI consumers that previously checked `==1` for a gate trip should switch to
 `==3` (v0.4 contract change).
@@ -533,7 +534,6 @@ CI consumers that previously checked `==1` for a gate trip should switch to
 
 Deferred to a future release. Order is rough priority, not a release plan:
 
-- `--fail-on-age` CI gate using `latest_release_age_days`.
 - Lockfile-drift detection (`Pipfile` ↔ `Pipfile.lock`, `poetry.lock`,
   `uv.lock`).
 - `update` for `pyproject.toml` and `Pipfile`.
