@@ -84,6 +84,56 @@ def test_parse_requirements_utf8_bom_still_works(tmp_path):
     assert "flask" in [d.name for d in parse_source(src)]
 
 
+def test_parse_bare_vcs_url_derives_name(tmp_path):
+    """A bare VCS URL with no #egg= should be surfaced as a URL dep whose name
+    is derived from the repo path, not silently dropped."""
+    p = tmp_path / "requirements.txt"
+    p.write_text("git+https://github.com/CybercentreCanada/pysigma.git\n", encoding="utf-8")
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=p, group="default")
+    d = _by_name(parse_source(src), "pysigma")
+    assert d.url and d.url.startswith("git+https://")
+
+
+def test_parse_bare_vcs_url_strips_ref_and_dotgit(tmp_path):
+    p = tmp_path / "requirements.txt"
+    p.write_text("git+https://github.com/org/My-Repo.git@v1.2.3\n", encoding="utf-8")
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=p, group="default")
+    # canonicalized name, ref + .git stripped
+    d = _by_name(parse_source(src), "my-repo")
+    assert d.url.endswith("@v1.2.3")
+
+
+def test_parse_bare_vcs_url_egg_fragment_wins(tmp_path):
+    p = tmp_path / "requirements.txt"
+    p.write_text("git+https://github.com/org/repo.git#egg=customname\n", encoding="utf-8")
+    src = DepSource(kind=SourceKind.REQUIREMENTS_TXT, path=p, group="default")
+    names = [d.name for d in parse_source(src)]
+    assert "customname" in names and "repo" not in names
+
+
+def test_parse_poetry_multi_constraint_one_dep_per_entry(tmp_path):
+    """Poetry platform-split deps (a list of {version, markers}) become one Dep
+    per entry, each carrying its own specifier and marker."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.poetry]\n'
+        'name = "x"\nversion = "0.1.0"\n'
+        '[tool.poetry.dependencies]\n'
+        'python = "^3.10"\n'
+        'torch = [\n'
+        '  {version = "^2.2.2", markers = "sys_platform != \'darwin\'"},\n'
+        '  {version = "~2.2.2", markers = "sys_platform == \'darwin\'"},\n'
+        ']\n',
+        encoding="utf-8",
+    )
+    src = DepSource(kind=SourceKind.PYPROJECT_POETRY, path=tmp_path / "pyproject.toml", group="default")
+    torch = [d for d in parse_source(src) if d.name == "torch"]
+    assert len(torch) == 2
+    specs = {str(d.specifier) for d in torch}
+    assert len(specs) == 2  # the ^ and ~ produce different ranges
+    markers = " ".join(str(d.marker) for d in torch)
+    assert "darwin" in markers
+
+
 def test_parse_requirements_txt_url_dep():
     src = DepSource(
         kind=SourceKind.REQUIREMENTS_TXT,

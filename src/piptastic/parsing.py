@@ -169,12 +169,32 @@ def _rewrite_bare_url(line: str) -> str:
     if not scheme or scheme not in _DIRECT_URL_SCHEMES:
         return line
     m = _EGG_FRAGMENT_RE.search(line)
-    if not m:
-        return line
-    name = m.group(1)
-    # Strip subdirectory/etc. tokens after the egg name if any leaked in.
-    name = name.split("&", 1)[0]
-    return f"{name} @ {line}"
+    if m:
+        # Explicit #egg=name always wins.
+        name = m.group(1).split("&", 1)[0]
+        return f"{name} @ {line}"
+    # No #egg= fragment: derive a name from the repo path so the requirement
+    # is surfaced as a URL-posture dep instead of being dropped.
+    name = _name_from_vcs_url(line)
+    if name:
+        return f"{name} @ {line}"
+    return line
+
+
+def _name_from_vcs_url(line: str) -> str | None:
+    """Best-effort package name from a direct-URL / VCS requirement's path.
+
+    `git+https://github.com/org/My-Repo.git@v1.2` -> `My-Repo`. Strips a
+    trailing `@<ref>`, a `.git` suffix, and any path/query leftovers. Returns
+    None when nothing usable remains (caller then leaves the line untouched).
+    """
+    path = urlsplit(line).path  # fragment/query already separated
+    seg = path.rstrip("/").rsplit("/", 1)[-1]
+    seg = seg.split("@", 1)[0]  # drop @ref (e.g. repo.git@v1.2)
+    if seg.endswith(".git"):
+        seg = seg[: -len(".git")]
+    seg = seg.strip()
+    return seg or None
 
 
 # ---------- pyproject.toml (PEP 621) ----------
@@ -212,35 +232,56 @@ def _parse_poetry(source: DepSource) -> list[Dep]:
     for name, value in table.items():
         if name == "python":  # interpreter constraint, not a real dep
             continue
-        pep508 = _poetry_to_pep508(name, value)
-        if pep508 is None:
-            continue
-        dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
-        if dep is not None:
-            deps.append(dep)
+        for pep508 in _poetry_to_pep508(name, value):
+            dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
+            if dep is not None:
+                deps.append(dep)
     return deps
 
 
-def _poetry_to_pep508(name: str, value: Any) -> str | None:
-    """Convert a Poetry dep spec to a PEP 508 string."""
+def _poetry_to_pep508(name: str, value: Any) -> list[str]:
+    """Convert a Poetry dep spec to zero or more PEP 508 strings.
+
+    Returns a list because Poetry supports *multiple-constraints dependencies*
+    — a list of `{version, markers}` tables for platform-specific pins. Each
+    entry becomes its own PEP 508 string (and thus its own Dep), so a
+    platform-split dependency is audited per-variant rather than dropped.
+    """
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(_poetry_to_pep508(name, item))
+        return out
+
     if isinstance(value, str):
         spec = _poetry_version_to_specifier(value)
-        return f"{name}{spec}" if spec else name
+        return [f"{name}{spec}" if spec else name]
 
     if not isinstance(value, dict):
         logger.warning("unsupported poetry dep spec for %s: %r", name, value)
-        return None
+        return []
 
     version = value.get("version", "*")
     spec = _poetry_version_to_specifier(version)
     extras = value.get("extras") or []
-    marker = value.get("python")
-
     extras_part = f"[{','.join(extras)}]" if extras else ""
-    marker_part = (
-        f"; {_python_constraint_to_marker(marker)}" if marker else ""
-    )
-    return f"{name}{extras_part}{spec}{marker_part}"
+
+    # A Poetry entry can carry a raw PEP 508 marker (`markers`) and/or the
+    # python-version shorthand (`python`). Honor both, parenthesized and
+    # AND-joined so `or` inside one clause can't bleed across the join.
+    clauses: list[str] = []
+    if value.get("markers"):
+        clauses.append(str(value["markers"]))
+    if value.get("python"):
+        clauses.append(_python_constraint_to_marker(value["python"]))
+    if len(clauses) == 1:
+        marker_part = f"; {clauses[0]}"
+    elif clauses:
+        marker_part = "; " + " and ".join(f"({c})" for c in clauses)
+    else:
+        marker_part = ""
+
+    return [f"{name}{extras_part}{spec}{marker_part}"]
 
 
 def _poetry_version_to_specifier(v: str) -> str:
@@ -375,12 +416,10 @@ def _parse_pipfile(source: DepSource) -> list[Dep]:
     for name, value in table.items():
         # Pipfile shorthand uses identical conventions to Poetry:
         # caret/tilde/star + table form with version/extras/markers.
-        pep508 = _poetry_to_pep508(name, value)
-        if pep508 is None:
-            continue
-        dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
-        if dep is not None:
-            deps.append(dep)
+        for pep508 in _poetry_to_pep508(name, value):
+            dep = _parse_one_requirement_line(pep508, source=source, line_no=None)
+            if dep is not None:
+                deps.append(dep)
     return deps
 
 

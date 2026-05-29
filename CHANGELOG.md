@@ -8,7 +8,19 @@ JSON shape.
 
 ## [Unreleased]
 
-No changes pending.
+### Added
+
+- **Bare VCS URLs are now surfaced.** A `requirements.txt` line like
+  `git+https://github.com/org/repo.git` (no `#egg=name`) was dropped because
+  it isn't valid PEP 508. The package name is now derived from the repo path
+  (trailing `@ref` and `.git` stripped) and the requirement is recorded as
+  `URL` posture. An explicit `#egg=name` still takes precedence.
+- **Poetry multiple-constraints dependencies are now parsed.** A
+  platform-split dep such as `torch = [{version = "^2.2", markers = "…"}, …]`
+  was skipped with a warning; each list entry now becomes its own dep with its
+  specifier and marker. Entries carrying a raw `markers` string (not just the
+  `python` shorthand) are honored, parenthesized and AND-joined. This also
+  applies to the equivalent Pipfile table form.
 
 ## [0.4.2] — 2026-05-29
 

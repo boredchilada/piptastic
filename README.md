@@ -424,9 +424,9 @@ originally declared in, not the file that included it.
 
 | Source | What's read |
 | --- | --- |
-| `requirements*.txt` family | PEP 508 specifiers; `-r` / `-c` includes with cycle detection; environment markers honored; URL / VCS / local-path requirements surfaced as `URL` posture. |
+| `requirements*.txt` family | PEP 508 specifiers; `-r` / `-c` includes with cycle detection; environment markers honored; URL / VCS / local-path requirements surfaced as `URL` posture. A bare `git+https://…` line without `#egg=name` is named from the repo path so it's still surfaced. |
 | `pyproject.toml` (PEP 621) | `[project].dependencies` and every list under `[project.optional-dependencies]`. |
-| `pyproject.toml` (Poetry) | `[tool.poetry.dependencies]` and `[tool.poetry.group.<name>.dependencies]`. Caret (`^1.2.3`) and tilde (`~1.2.3`) shorthands expanded to PEP 440 ranges. `python` is excluded. |
+| `pyproject.toml` (Poetry) | `[tool.poetry.dependencies]` and `[tool.poetry.group.<name>.dependencies]`. Caret (`^1.2.3`) and tilde (`~1.2.3`) shorthands expanded to PEP 440 ranges. `python` is excluded. Multiple-constraints dependencies (a list of `{version, markers}` tables for platform-specific pins) become one dep per entry, each with its own specifier and marker. |
 | `Pipfile` | `[packages]` and `[dev-packages]`. |
 | `Pipfile.lock` | Hashed pin lines from `default` and `develop` sections. |
 
