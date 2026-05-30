@@ -68,6 +68,7 @@ def _dep_to_dict(da: DepAudit) -> dict:
         "marker": str(dep.marker) if dep.marker else None,
         "url": dep.url,
         "pin_status": da.pin_status.value,
+        "direct": da.dep.direct,
         "current": current,
         "installed": str(da.installed) if da.installed else None,
         "latest": str(da.latest) if da.latest else None,

@@ -97,6 +97,9 @@ true):
 5. `pin_status`/`drift` values are always valid enum members.
 6. Output is deterministic given the same inputs (projects sorted by name,
    dedup preserves first-seen order, `_pick_latest` is order-independent).
+7. `pinning_score` is computed over **direct** deps only (`a.dep.direct`), so a
+   lockfile's always-pinned transitive graph doesn't force every locked project
+   to ~100%.
 
 ---
 
@@ -140,6 +143,16 @@ this is why `audit <single-project>` defaults to the table view.
   `markers` string and/or the `python` shorthand (parenthesized + AND-joined).
   Both the Poetry and Pipfile callers iterate the returned list — if you change
   its return type, update both.
+- **Lockfiles** (`uv.lock` / `poetry.lock` / `pdm.lock`) go through
+  `_parse_lockfile`: all three are TOML with `[[package]]` arrays, so it reads
+  `data["package"]` and emits each as an exact `==` pin (the **full resolved
+  graph**, direct + transitive). `_lockfile_direct_names` reads the sibling
+  `pyproject.toml` to compute the direct-dep set and tags each `Dep.direct`
+  accordingly (returns `None` = "unknown" when there's no manifest, so entries
+  degrade to direct). The local project's own editable/virtual entry is
+  skipped. **Discovery suppresses the matching manifest source** when a lock is
+  present (`discovery._dep_sources_in_dir`: poetry.lock → skip Poetry source;
+  uv/pdm.lock → skip PEP 621 source) so packages aren't double-counted.
 
 ---
 

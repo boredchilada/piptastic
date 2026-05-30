@@ -103,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show only deps with drift at or above this level. Empty projects are dropped.",
     )
     audit.add_argument(
+        "--direct-only",
+        action="store_true",
+        help=(
+            "Hide transitive lockfile deps from the output (display-only; gates "
+            "still evaluate the full resolved graph)."
+        ),
+    )
+    audit.add_argument(
         "--fail-on-vuln",
         metavar="any|N",
         default=None,
@@ -359,6 +367,7 @@ def _cmd_audit(args) -> int:
         audits,
         vulnerable_only=getattr(args, "vulnerable_only", False),
         drift_min=getattr(args, "drift_min", None),
+        direct_only=getattr(args, "direct_only", False),
     )
 
     if args.json:
@@ -374,6 +383,8 @@ def _cmd_audit(args) -> int:
             active.append("--vulnerable-only")
         if getattr(args, "drift_min", None):
             active.append(f"--drift-min {args.drift_min}")
+        if getattr(args, "direct_only", False):
+            active.append("--direct-only")
         crit = " and ".join(active) if active else "the active filter"
         print(f"No deps matched {crit} across {len(audits)} project(s) scanned.")
     else:
@@ -562,6 +573,7 @@ def _filter_audits(
     *,
     vulnerable_only: bool,
     drift_min: str | None,
+    direct_only: bool = False,
 ) -> list[ProjectAudit]:
     """Drop deps that don't match the filter; drop projects that end up empty.
 
@@ -569,7 +581,7 @@ def _filter_audits(
     — they reflect the project as a whole, not the filtered view. Only the
     `deps` list shrinks.
     """
-    if not vulnerable_only and drift_min is None:
+    if not vulnerable_only and drift_min is None and not direct_only:
         return audits
     drift_threshold = _DRIFT_RANK[SemverDrift(drift_min)] if drift_min else 0
     out: list[ProjectAudit] = []
@@ -579,6 +591,8 @@ def _filter_audits(
             if vulnerable_only and not d.vulnerabilities:
                 continue
             if drift_min and _DRIFT_RANK[d.drift] < drift_threshold:
+                continue
+            if direct_only and not d.dep.direct:
                 continue
             keep.append(d)
         if not keep:

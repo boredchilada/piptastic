@@ -356,7 +356,14 @@ def _pinning_score(audits: list[DepAudit]) -> float | None:
     weight (e.g. project with only URL deps, which are deliberately excluded
     from PIN_WEIGHTS because URL pinning posture is fuzzy without parsing the
     ref). Render layer should show 'n/a' for None instead of '0%'."""
-    scored = [PIN_WEIGHTS[a.pin_status] for a in audits if a.pin_status in PIN_WEIGHTS]
+    # Score only direct deps: transitive entries from a lockfile are always
+    # exact pins and would otherwise force every locked project to ~100%,
+    # drowning out how the author actually declared their direct deps.
+    scored = [
+        PIN_WEIGHTS[a.pin_status]
+        for a in audits
+        if a.dep.direct and a.pin_status in PIN_WEIGHTS
+    ]
     if not scored:
         return None
     return sum(scored) / len(scored)

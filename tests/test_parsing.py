@@ -134,6 +134,74 @@ def test_parse_poetry_multi_constraint_one_dep_per_entry(tmp_path):
     assert "darwin" in markers
 
 
+def test_parse_uv_lock_full_graph_with_direct_tagging():
+    src = DepSource(
+        kind=SourceKind.UV_LOCK,
+        path=FIXTURES / "uv_lock_project" / "uv.lock",
+        group="default",
+    )
+    deps = {d.name: d for d in parse_source(src)}
+    assert set(deps) == {"flask", "werkzeug"}      # uv-demo (editable) skipped
+    assert str(deps["flask"].specifier) == "==3.0.2"
+    assert deps["flask"].direct is True            # declared in pyproject
+    assert deps["werkzeug"].direct is False        # transitive only
+
+
+def test_parse_poetry_lock_full_graph_with_direct_tagging():
+    src = DepSource(
+        kind=SourceKind.POETRY_LOCK,
+        path=FIXTURES / "poetry_lock_project" / "poetry.lock",
+        group="default",
+    )
+    deps = {d.name: d for d in parse_source(src)}
+    assert set(deps) == {"requests", "urllib3"}
+    assert str(deps["requests"].specifier) == "==2.31.0"
+    assert deps["requests"].direct is True
+    assert deps["urllib3"].direct is False
+
+
+def test_parse_pdm_lock_full_graph_with_direct_tagging():
+    src = DepSource(
+        kind=SourceKind.PDM_LOCK,
+        path=FIXTURES / "pdm_lock_project" / "pdm.lock",
+        group="default",
+    )
+    deps = {d.name: d for d in parse_source(src)}
+    assert set(deps) == {"click", "colorama"}
+    assert str(deps["click"].specifier) == "==8.1.7"
+    assert deps["click"].direct is True
+    assert deps["colorama"].direct is False
+
+
+def test_lockfile_without_manifest_marks_all_direct(tmp_path):
+    """No sibling pyproject -> direct-set is empty, every locked dep degrades to
+    direct=True (we can't prove otherwise)."""
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\n\n'
+        '[[package]]\nname = "flask"\nversion = "3.0.2"\n'
+        'source = { registry = "https://pypi.org/simple" }\n',
+        encoding="utf-8",
+    )
+    src = DepSource(kind=SourceKind.UV_LOCK, path=tmp_path / "uv.lock", group="default")
+    deps = parse_source(src)
+    assert len(deps) == 1 and deps[0].direct is True
+
+
+def test_parse_lockfile_keeps_same_package_at_multiple_versions(tmp_path):
+    """A real lock can resolve the same package at several versions (platform /
+    python markers — observed e.g. numpy 2.0.2 + 2.2.0, torch 2.2.2 + 2.5.1 in
+    docling's poetry.lock). Every distinct (name, version) pin must be kept;
+    collapsing by name would hide a vulnerable variant from the CVE scan."""
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = "numpy"\nversion = "2.0.2"\noptional = false\n\n'
+        '[[package]]\nname = "numpy"\nversion = "2.2.0"\noptional = false\n',
+        encoding="utf-8",
+    )
+    src = DepSource(kind=SourceKind.POETRY_LOCK, path=tmp_path / "poetry.lock", group="default")
+    versions = sorted(str(d.specifier) for d in parse_source(src) if d.name == "numpy")
+    assert versions == ["==2.0.2", "==2.2.0"]
+
+
 def test_parse_requirements_txt_url_dep():
     src = DepSource(
         kind=SourceKind.REQUIREMENTS_TXT,

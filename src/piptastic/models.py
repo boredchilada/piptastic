@@ -45,6 +45,9 @@ class SourceKind(str, Enum):
     PYPROJECT_POETRY = "pyproject_poetry"
     PIPFILE = "pipfile"
     PIPFILE_LOCK = "pipfile_lock"
+    UV_LOCK = "uv_lock"
+    POETRY_LOCK = "poetry_lock"
+    PDM_LOCK = "pdm_lock"
 
     def __str__(self) -> str:
         return self.value
@@ -67,6 +70,10 @@ class Dep:
     source: DepSource
     line_no: int | None
     url: str | None
+    # False for transitive entries discovered only in a lockfile's resolved
+    # graph (not declared in the project's manifest). Defaults True so every
+    # non-lockfile parser and existing call site is unaffected.
+    direct: bool = True
 
 
 @dataclass(frozen=True)

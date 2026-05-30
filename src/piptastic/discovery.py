@@ -124,10 +124,31 @@ def _dep_sources_in_dir(d: Path, filenames: list[str]) -> Iterable[DepSource]:
             )
             yield DepSource(kind=kind, path=d / fname, group=_infer_group(fname))
 
+    # Lockfiles (uv/poetry/pdm) win over their manifest: when present they are
+    # the authoritative resolved graph, so we suppress the matching pyproject
+    # source to avoid double-counting the same packages.
+    has_uv = "uv.lock" in fileset
+    has_pdm = "pdm.lock" in fileset
+    has_poetry_lock = "poetry.lock" in fileset
+    suppress_pep621 = has_uv or has_pdm   # uv/pdm declare deps under [project]
+    suppress_poetry = has_poetry_lock
+
     # pyproject.toml: may produce PEP 621 and/or Poetry sources, each with
     # multiple groups
     if "pyproject.toml" in fileset:
-        yield from _pyproject_sources(d / "pyproject.toml")
+        for src in _pyproject_sources(d / "pyproject.toml"):
+            if src.kind == SourceKind.PYPROJECT_PEP621 and suppress_pep621:
+                continue
+            if src.kind == SourceKind.PYPROJECT_POETRY and suppress_poetry:
+                continue
+            yield src
+
+    if has_uv:
+        yield DepSource(kind=SourceKind.UV_LOCK, path=d / "uv.lock", group="default")
+    if has_poetry_lock:
+        yield DepSource(kind=SourceKind.POETRY_LOCK, path=d / "poetry.lock", group="default")
+    if has_pdm:
+        yield DepSource(kind=SourceKind.PDM_LOCK, path=d / "pdm.lock", group="default")
 
     # Pipfile + Pipfile.lock
     if "Pipfile" in fileset:

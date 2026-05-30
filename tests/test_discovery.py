@@ -20,6 +20,27 @@ def test_discover_tree_finds_all_fixture_projects():
     assert "mixed" in names
 
 
+def test_uv_lock_suppresses_pep621_manifest():
+    proj = discover_one(FIXTURES / "uv_lock_project")
+    kinds = {s.kind for s in proj.dep_sources}
+    assert SourceKind.UV_LOCK in kinds
+    assert SourceKind.PYPROJECT_PEP621 not in kinds  # lock wins
+
+
+def test_poetry_lock_suppresses_poetry_manifest():
+    proj = discover_one(FIXTURES / "poetry_lock_project")
+    kinds = {s.kind for s in proj.dep_sources}
+    assert SourceKind.POETRY_LOCK in kinds
+    assert SourceKind.PYPROJECT_POETRY not in kinds
+
+
+def test_pdm_lock_suppresses_pep621_manifest():
+    proj = discover_one(FIXTURES / "pdm_lock_project")
+    kinds = {s.kind for s in proj.dep_sources}
+    assert SourceKind.PDM_LOCK in kinds
+    assert SourceKind.PYPROJECT_PEP621 not in kinds
+
+
 def test_discover_tree_excludes_venv():
     """A project root with a .venv/ subdir is itself a project, but the .venv
     must not be descended into."""

@@ -51,6 +51,8 @@ def parse_source(source: DepSource) -> list[Dep]:
         return _parse_pipfile(source)
     if source.kind == SourceKind.PIPFILE_LOCK:
         return _parse_pipfile_lock(source)
+    if source.kind in (SourceKind.UV_LOCK, SourceKind.POETRY_LOCK, SourceKind.PDM_LOCK):
+        return _parse_lockfile(source)
     raise NotImplementedError(f"parsing for {source.kind} not yet implemented")
 
 
@@ -131,7 +133,7 @@ def _resolve_include(base_dir: Path, line: str) -> Path | None:
 
 
 def _parse_one_requirement_line(
-    line: str, *, source: DepSource, line_no: int | None
+    line: str, *, source: DepSource, line_no: int | None, direct: bool = True
 ) -> Dep | None:
     # Pip allows bare direct-URL / VCS requirements (e.g.
     # `git+https://github.com/x/y@v1#egg=name`) without a `name @ ` prefix.
@@ -155,6 +157,7 @@ def _parse_one_requirement_line(
         source=source,
         line_no=line_no,
         url=url,
+        direct=direct,
     )
 
 
@@ -445,3 +448,103 @@ def _parse_pipfile_lock(source: DepSource) -> list[Dep]:
         if dep is not None:
             deps.append(dep)
     return deps
+
+
+# ---------- uv.lock / poetry.lock / pdm.lock ----------
+
+def _parse_lockfile(source: DepSource) -> list[Dep]:
+    """Parse a resolved lockfile (uv / poetry / pdm) into the full graph.
+
+    All three are TOML with an array-of-tables `[[package]]`. Every entry
+    becomes an exact `==` pin. Entries are tagged direct vs transitive by
+    cross-referencing the sibling `pyproject.toml`'s declared dependency names
+    (best effort — a missing manifest degrades every entry to `direct=True`).
+    The project's own (editable/virtual) entry is skipped.
+    """
+    data = _read_toml(source.path)
+    packages = data.get("package")
+    if not isinstance(packages, list):
+        return []
+
+    direct_names, own_name = _lockfile_direct_names(source.path.parent, source.kind)
+
+    deps: list[Dep] = []
+    for pkg in packages:
+        if not isinstance(pkg, dict):
+            continue
+        name = pkg.get("name")
+        version = pkg.get("version")
+        if not name or not version:
+            continue
+        canon = canonicalize_name(str(name))
+        if canon == own_name:
+            continue  # the project itself, not a dependency
+        src = pkg.get("source")
+        if isinstance(src, dict) and ("editable" in src or "virtual" in src):
+            continue  # uv records the local project this way
+        dep = _parse_one_requirement_line(
+            f"{name}=={version}",
+            source=source,
+            line_no=None,
+            # direct_names is None when no manifest was found — we can't prove a
+            # package is transitive, so default to direct.
+            direct=(direct_names is None or canon in direct_names),
+        )
+        if dep is not None:
+            deps.append(dep)
+    return deps
+
+
+def _lockfile_direct_names(
+    project_dir: Path, kind: SourceKind
+) -> tuple[set[str] | None, str | None]:
+    """Return (canonical direct-dependency names, canonical project name) read
+    from the sibling `pyproject.toml`. Names is None when no manifest is present
+    (the direct set is unknown — caller treats every locked dep as direct)."""
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.is_file():
+        return None, None
+    data = _read_toml(pyproject)
+    names: set[str] = set()
+
+    if kind == SourceKind.POETRY_LOCK:
+        poetry = (data.get("tool") or {}).get("poetry") or {}
+        own_raw = poetry.get("name")
+        for dep_name in (poetry.get("dependencies") or {}):
+            if dep_name != "python":
+                names.add(canonicalize_name(dep_name))
+        for group in (poetry.get("group") or {}).values():
+            for dep_name in ((group or {}).get("dependencies") or {}):
+                if dep_name != "python":
+                    names.add(canonicalize_name(dep_name))
+    else:  # uv / pdm use PEP 621 [project]
+        project = data.get("project") or {}
+        own_raw = project.get("name")
+        for spec in project.get("dependencies") or []:
+            n = _requirement_name(spec)
+            if n:
+                names.add(n)
+        for extra in (project.get("optional-dependencies") or {}).values():
+            for spec in extra or []:
+                n = _requirement_name(spec)
+                if n:
+                    names.add(n)
+        # PEP 735 dependency groups (uv/pdm dev deps) — best effort.
+        for grp in (data.get("dependency-groups") or {}).values():
+            for spec in grp or []:
+                n = _requirement_name(spec)
+                if n:
+                    names.add(n)
+
+    own = canonicalize_name(str(own_raw)) if own_raw else None
+    return names, own
+
+
+def _requirement_name(spec: object) -> str | None:
+    """Canonical name from a PEP 508 string, or None if it isn't one."""
+    if not isinstance(spec, str):
+        return None
+    try:
+        return canonicalize_name(Requirement(spec).name)
+    except InvalidRequirement:
+        return None

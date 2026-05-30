@@ -205,6 +205,27 @@ def test_audit_project_latest_release_date_none_when_unknown(monkeypatch):
     assert report.deps[0].latest_release_date is None
 
 
+def test_pinning_score_ignores_transitive_deps(monkeypatch):
+    """A lockfile-backed project: pin score reflects the direct deps' declared
+    posture, not the always-pinned transitive graph."""
+    import dataclasses
+    project = _project_with_deps([])
+    direct = _dep("flask", ">=2.0")                     # FLOOR (0.3), direct
+    transitive = dataclasses.replace(_dep("werkzeug", "==3.0.1"), direct=False)  # PINNED, transitive
+    deps = [direct, transitive]
+    md = {
+        "flask": _md("flask", {"3.0.2": {"rp": ">=3.8"}}),
+        "werkzeug": _md("werkzeug", {"3.0.1": {"rp": ">=3.8"}}),
+    }
+    from piptastic import analysis
+    monkeypatch.setattr(analysis, "_collect_deps", lambda project: deps)
+    report = audit_project(project, FakeClient(md), current_python=Version("3.11"))
+    # Only the direct FLOOR dep counts -> 0.3, not (0.3 + 1.0)/2 = 0.65.
+    assert abs(report.pinning_score - 0.3) < 1e-9
+    # But both deps are present in the audit (full graph).
+    assert {d.dep.name for d in report.deps} == {"flask", "werkzeug"}
+
+
 def test_audit_project_pinning_score(monkeypatch):
     project = _project_with_deps([])
     deps = [

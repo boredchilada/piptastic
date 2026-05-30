@@ -10,6 +10,38 @@ JSON shape.
 
 No changes pending.
 
+## [0.6.0] — 2026-05-29
+
+**In plain English:** piptastic now reads lock files (`uv.lock`, `poetry.lock`,
+`pdm.lock`). A lock file records the exact versions actually installed,
+including the behind-the-scenes packages your dependencies pull in — which is
+where most vulnerabilities hide. When a lock file is present piptastic audits
+that full resolved graph instead of the looser ranges in `pyproject.toml`, so
+you get precise staleness and a complete CVE scan. Transitive (pulled-in)
+packages are labelled, and `--direct-only` hides them if you just want the
+packages you chose yourself.
+
+### Added
+
+- **Lockfile parsing: `uv.lock`, `poetry.lock`, `pdm.lock`.** When a lockfile
+  is present it becomes the authoritative source for the project: piptastic
+  audits the full resolved graph (direct **and** transitive) at exact pins,
+  giving real drift and a complete CVE scan — including the transitive
+  dependencies where most advisories live. The matching `pyproject.toml`
+  source is suppressed to avoid double-counting; the manifest is still read to
+  tag which entries are direct. The project's own editable/virtual entry is
+  skipped. No new runtime dependency (all three are TOML).
+- **Transitive deps are marked.** Terminal output labels them (`transitive`);
+  JSON gains an additive per-dep `direct` boolean (no schema-version bump).
+- **`audit --direct-only`** hides transitive lockfile deps from the output.
+  Display-only — `--fail-on-*` gates still evaluate the full graph.
+
+### Changed
+
+- Pin score is now computed over **direct** dependencies only, so a
+  lockfile-backed project isn't forced to ~100% by its always-pinned
+  transitive graph. Projects without lockfiles are unaffected.
+
 ## [0.5.0] — 2026-05-29
 
 **In plain English:** piptastic now reads two dependency forms it used to skip.
@@ -231,7 +263,8 @@ errors.
 - Cross-platform line endings pinned via `.gitattributes`.
 - AGPL-3.0-or-later license.
 
-[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/boredchilada/piptastic/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/boredchilada/piptastic/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/boredchilada/piptastic/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/boredchilada/piptastic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/boredchilada/piptastic/compare/v0.4.0...v0.4.1

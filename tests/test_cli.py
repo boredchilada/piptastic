@@ -178,6 +178,38 @@ def test_filter_helper_vulnerable_only_and_drift_min():
     assert out == []  # no dep is both vulnerable AND minor+ drift
 
 
+def test_filter_helper_direct_only():
+    """--direct-only drops transitive deps from display but the project's
+    counters (which gates read) are untouched."""
+    import dataclasses
+    from packaging.specifiers import SpecifierSet
+    from piptastic.cli import _filter_audits
+    from piptastic.models import (
+        Dep, DepAudit, DepSource, PinStatus, Project, ProjectAudit,
+        SemverDrift, SourceKind,
+    )
+
+    src = DepSource(kind=SourceKind.UV_LOCK, path=Path("uv.lock"), group="default")
+    proj = Project(name="p", path=Path("/p"), python_version=None,
+                   python_source=None, python_constraints=None, dep_sources=(src,))
+
+    def _audit(name, direct):
+        dep = Dep(name=name, raw_name=name, specifier=SpecifierSet("==1.0.0"),
+                  extras=frozenset(), marker=None, source=src, line_no=None,
+                  url=None, direct=direct)
+        return DepAudit(dep=dep, installed=None, latest=None,
+                        latest_including_prereleases=None, drift=SemverDrift.NONE,
+                        pin_status=PinStatus.PINNED, yanked=False, warnings=())
+
+    pa = ProjectAudit(
+        project=proj, deps=[_audit("flask", True), _audit("werkzeug", False)],
+        pinning_score=1.0, vuln_count=2,
+    )
+    out = _filter_audits([pa], vulnerable_only=False, drift_min=None, direct_only=True)
+    assert {d.dep.name for d in out[0].deps} == {"flask"}   # transitive dropped
+    assert out[0].vuln_count == 2                            # counter preserved for gates
+
+
 def test_exceeds_age_threshold():
     """_exceeds_age_threshold trips on old releases, ignores unknown dates."""
     from datetime import datetime, timedelta, timezone

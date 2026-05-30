@@ -145,6 +145,7 @@ dependency's pin posture, drift against PyPI, and known CVEs.
 | `--no-vulns` | Skip the pip-audit CVE pass entirely. Mutually exclusive with `--fail-on-vuln`. |
 | `--vulnerable-only` | Show only deps with non-suppressed CVEs. Projects with zero matches are dropped. |
 | `--drift-min {build,patch,minor,major,epoch}` | Show only deps with drift ≥ this level. |
+| `--direct-only` | Hide transitive lockfile deps from the output. Display-only — gates still evaluate the full resolved graph. |
 | `--fail-on-drift {build,patch,minor,major,epoch}` | Exit `3` when any dep has drift ≥ this level. |
 | `--fail-on-age DAYS` | Exit `3` when any dep's latest release is older than `DAYS`. Deps with an unknown release date (PyPI miss) never trip it. |
 | `--fail-on-vuln any\|N` | Exit `3` when any dep has a non-suppressed CVE (`any`) or when tree-wide CVE count ≥ N. |
@@ -409,6 +410,7 @@ A directory is a Python project if it contains any of:
 - `requirements*.txt` (including `requirements-dev.txt`, etc.)
 - `pyproject.toml` with a `[project]` or `[tool.poetry]` table
 - `Pipfile`
+- `uv.lock`, `poetry.lock`, or `pdm.lock`
 
 Walks skip `.git`, `.venv`, `venv`, `env`, `.env`, `node_modules`,
 `__pycache__`, `site-packages`, `build`, `dist`, `.tox`, `.nox`,
@@ -429,6 +431,7 @@ originally declared in, not the file that included it.
 | `pyproject.toml` (Poetry) | `[tool.poetry.dependencies]` and `[tool.poetry.group.<name>.dependencies]`. Caret (`^1.2.3`) and tilde (`~1.2.3`) shorthands expanded to PEP 440 ranges. `python` is excluded. Multiple-constraints dependencies (a list of `{version, markers}` tables for platform-specific pins) become one dep per entry, each with its own specifier and marker. |
 | `Pipfile` | `[packages]` and `[dev-packages]`. |
 | `Pipfile.lock` | Hashed pin lines from `default` and `develop` sections. |
+| `uv.lock` / `poetry.lock` / `pdm.lock` | The full resolved graph — every `[[package]]` entry as an exact pin (direct **and** transitive). When a lockfile is present it supersedes its manifest (the matching `pyproject.toml` source is skipped to avoid double-counting); the manifest is still read to tag which entries are direct. Transitive entries are marked in the output and `direct: false` in JSON. The project's own editable/virtual entry is skipped. |
 
 `requirements*.txt` files are decoded as UTF-8 (a UTF-8 BOM is tolerated). A
 UTF-16 or UTF-32 byte-order mark is detected and decoded accordingly, so a
@@ -511,6 +514,9 @@ Per-project fields (audit): `pinning_score`, `drift_summary`, `yanked_count`,
 | `1` | v0.2.0 | Initial public schema. |
 | `2` | v0.3.0 | Adds `vulnerabilities[]` and `min_safe_version` per dep; `vuln_count` and `vuln_unreachable` per project. |
 | `3` | v0.4.0 | Adds `latest_release_date` and `latest_release_age_days` per dep; `suppressed` and optional `suppression` block per vuln; `suppressed_count` per project. All additive. |
+
+Additive-since-v3 (no version bump): per-dep `direct` boolean (false for
+transitive lockfile entries), added in v0.6.0.
 
 ### Caching
 

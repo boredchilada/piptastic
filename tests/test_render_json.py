@@ -94,6 +94,16 @@ def test_render_json_dep_shape():
     assert dep["drift"] == "minor"
     assert dep["yanked"] is False
     assert dep["warnings"] == []
+    assert dep["direct"] is True  # default; lock transitive deps set this False
+
+
+def test_render_json_marks_transitive_dep():
+    import dataclasses
+    base = _make_audit()
+    transitive = dataclasses.replace(base.deps[0], dep=dataclasses.replace(base.deps[0].dep, direct=False))
+    base.deps = [transitive]
+    parsed = json.loads(render_json([base], root=Path("/projects")))
+    assert parsed["projects"][0]["deps"][0]["direct"] is False
 
 
 def test_render_json_handles_url_dep():

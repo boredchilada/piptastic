@@ -169,6 +169,8 @@ def _render_table(audits: list[ProjectAudit], console: Console) -> None:
             notes = ", ".join(d.warnings) if d.warnings else ""
             if d.yanked:
                 notes = "yanked" + (f"; {notes}" if notes else "")
+            if not d.dep.direct:
+                notes = "transitive" + (f"; {notes}" if notes else "")
             current = _current_str(d)
             latest = str(d.latest) if d.latest else "-"
             age_text, age_style = _format_age(d.latest_release_date)
@@ -241,6 +243,7 @@ def _dep_line(d: DepAudit) -> str:
         # Surface age only when it's interesting (1+ year stale).
         if style_age in ("orange3", "red"):
             age_mark = f"  [{style_age}](age: {text})[/{style_age}]"
+    transitive_mark = "" if d.dep.direct else "  [dim](transitive)[/dim]"
     return (
         f"{d.dep.name:<25} "
         f"{current:<14} -> {latest:<10}  "
@@ -249,6 +252,7 @@ def _dep_line(d: DepAudit) -> str:
         f"{yanked_mark}"
         f"{vuln_mark}"
         f"{age_mark}"
+        f"{transitive_mark}"
     )
 
 
